@@ -1,0 +1,30 @@
+[gd_scene load_steps=3 format=3 uid="uid://cqpo6l5l4m2cv"]
+
+[ext_resource type="Texture2D" uid="uid://bvnhr0pgy8h8t" path="res://Assets/cardBacks.png" id="1_rbyv4"]
+[ext_resource type="Script" path="res://Scripts/cardHeld.gd" id="2_two5e"]
+
+[node name="Card" type="Container"]
+visible = false
+custom_minimum_size = Vector2(105, 136)
+offset_right = 105.0
+offset_bottom = 136.0
+scale = Vector2(1.2, 1.2)
+script = ExtResource("2_two5e")
+
+[node name="cardBack" type="Sprite2D" parent="."]
+texture = ExtResource("1_rbyv4")
+flip_h = true
+hframes = 4
+vframes = 5
+frame = 12
+
+[node name="shadow" type="Sprite2D" parent="cardBack"]
+modulate = Color(0, 0, 0, 1)
+self_modulate = Color(0.407843, 0.407843, 0.407843, 0.34902)
+show_behind_parent = true
+position = Vector2(0, 3)
+texture = ExtResource("1_rbyv4")
+flip_h = true
+hframes = 4
+vframes = 5
+frame = 12

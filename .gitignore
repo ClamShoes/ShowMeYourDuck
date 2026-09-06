@@ -1,0 +1,11 @@
+.godot/
+**/.godot/
+Godot_v4.7.2/
+/android/
+/export/
+*.translation
+.DS_Store
+Thumbs.db
+*.7z
+.git.bak/
+**/.git.bak/

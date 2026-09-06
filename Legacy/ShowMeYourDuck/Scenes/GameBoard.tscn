@@ -1,0 +1,142 @@
+[gd_scene load_steps=8 format=3 uid="uid://vgbfpvtyob6d"]
+
+[ext_resource type="Script" path="res://Scripts/game_board.gd" id="1_6coq7"]
+[ext_resource type="Script" path="res://Scripts/hand.gd" id="2_caqr2"]
+[ext_resource type="PackedScene" uid="uid://bci4h5idsp6xa" path="res://Scenes/PlayedCards.tscn" id="3_hi2gt"]
+[ext_resource type="PackedScene" uid="uid://cqpo6l5l4m2cv" path="res://Scenes/cardHeld.tscn" id="3_v6yfo"]
+[ext_resource type="Script" path="res://Scripts/button.gd" id="4_lytoh"]
+[ext_resource type="Script" path="res://Scripts/player.gd" id="6_7sb4r"]
+[ext_resource type="PackedScene" uid="uid://omyog62oq7h4" path="res://Scenes/card.tscn" id="7_74hep"]
+
+[node name="GameBoard" type="Node"]
+script = ExtResource("1_6coq7")
+
+[node name="UI" type="CanvasLayer" parent="."]
+
+[node name="CardHolder" type="Container" parent="UI"]
+unique_name_in_owner = true
+z_index = 6
+offset_left = 291.0
+offset_top = 196.0
+offset_right = 331.0
+offset_bottom = 236.0
+
+[node name="Card" parent="UI/CardHolder" instance=ExtResource("3_v6yfo")]
+layout_mode = 2
+
+[node name="CenterContainer" type="CenterContainer" parent="UI"]
+z_index = 500
+anchors_preset = 7
+anchor_left = 0.5
+anchor_top = 1.0
+anchor_right = 0.5
+anchor_bottom = 1.0
+offset_left = -193.0
+offset_top = -136.0
+offset_right = 199.0
+offset_bottom = 69.0
+grow_horizontal = 2
+grow_vertical = 0
+
+[node name="Hand" type="HBoxContainer" parent="UI/CenterContainer"]
+unique_name_in_owner = true
+z_index = 500
+layout_mode = 2
+size_flags_horizontal = 6
+size_flags_vertical = 4
+alignment = 1
+script = ExtResource("2_caqr2")
+
+[node name="PlayedCards" parent="UI" instance=ExtResource("3_hi2gt")]
+unique_name_in_owner = true
+anchors_preset = -1
+anchor_left = 0.219
+anchor_top = 0.392
+anchor_right = 0.813
+anchor_bottom = 0.752
+offset_left = -0.28801
+offset_top = -0.0160065
+offset_right = 0.42395
+offset_bottom = -0.296021
+size_flags_horizontal = 4
+size_flags_vertical = 4
+
+[node name="PlayedCard0" type="Control" parent="UI/PlayedCards"]
+anchors_preset = 0
+offset_right = 40.0
+offset_bottom = 40.0
+
+[node name="PlayedCard1" type="Control" parent="UI/PlayedCards"]
+anchors_preset = 0
+offset_left = 11.0
+offset_right = 51.0
+offset_bottom = 40.0
+
+[node name="PlayedCard2" type="Control" parent="UI/PlayedCards"]
+anchors_preset = 0
+offset_left = 22.0
+offset_right = 62.0
+offset_bottom = 40.0
+
+[node name="PlayedCard3" type="Control" parent="UI/PlayedCards"]
+anchors_preset = 0
+offset_left = 33.0
+offset_right = 73.0
+offset_bottom = 40.0
+
+[node name="DisplayedCards" type="HBoxContainer" parent="UI/PlayedCards"]
+layout_mode = 0
+offset_left = 175.0
+offset_top = 2.0
+offset_right = 270.0
+offset_bottom = 127.0
+size_flags_horizontal = 6
+size_flags_vertical = 4
+alignment = 1
+
+[node name="Button" type="Button" parent="UI"]
+unique_name_in_owner = true
+offset_left = 26.0
+offset_top = 579.0
+offset_right = 62.0
+offset_bottom = 618.0
+scale = Vector2(1.72773, 1.61464)
+script = ExtResource("4_lytoh")
+
+[node name="Button2" type="Button" parent="UI"]
+unique_name_in_owner = true
+offset_left = 126.0
+offset_top = 579.0
+offset_right = 162.0
+offset_bottom = 618.0
+scale = Vector2(1.72773, 1.61464)
+script = ExtResource("4_lytoh")
+
+[node name="Player" type="Node2D" parent="."]
+unique_name_in_owner = true
+z_index = -50
+position = Vector2(435, 800)
+script = ExtResource("6_7sb4r")
+
+[node name="Skull" parent="Player" instance=ExtResource("7_74hep")]
+unique_name_in_owner = true
+z_index = -50
+
+[node name="Card2" parent="Player" instance=ExtResource("7_74hep")]
+unique_name_in_owner = true
+
+[node name="Card3" parent="Player" instance=ExtResource("7_74hep")]
+unique_name_in_owner = true
+
+[node name="Card4" parent="Player" instance=ExtResource("7_74hep")]
+unique_name_in_owner = true
+
+[connection signal="mouse_entered" from="UI/CenterContainer/Hand" to="UI/CenterContainer/Hand" method="_on_mouse_entered"]
+[connection signal="mouse_exited" from="UI/CenterContainer/Hand" to="UI/CenterContainer/Hand" method="_on_mouse_exited"]
+[connection signal="gui_input" from="UI/PlayedCards" to="UI/PlayedCards" method="_on_gui_input"]
+[connection signal="mouse_entered" from="UI/PlayedCards" to="UI/PlayedCards" method="_on_mouse_entered"]
+[connection signal="mouse_exited" from="UI/PlayedCards" to="UI/PlayedCards" method="_on_mouse_exited"]
+[connection signal="mouse_entered" from="UI/PlayedCards/DisplayedCards" to="UI/PlayedCards/DisplayedCards" method="_on_mouse_entered"]
+[connection signal="mouse_exited" from="UI/PlayedCards/DisplayedCards" to="UI/PlayedCards/DisplayedCards" method="_on_mouse_exited"]
+[connection signal="pressed" from="UI/Button" to="Player" method="_on_button_pressed"]
+[connection signal="pressed" from="UI/Button2" to="UI/CenterContainer/Hand" method="_on_button_2_pressed"]

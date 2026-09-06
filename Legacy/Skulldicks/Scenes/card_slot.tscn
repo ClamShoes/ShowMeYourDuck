@@ -1,0 +1,15 @@
+[gd_scene load_steps=2 format=3 uid="uid://b1kqvsil6fl7x"]
+
+[ext_resource type="Script" path="res://Scripts/card_slot.gd" id="1_rer0j"]
+
+[node name="CardSlot" type="Control"]
+custom_minimum_size = Vector2(95, 125)
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_right = -1057.0
+offset_bottom = -523.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_rer0j")

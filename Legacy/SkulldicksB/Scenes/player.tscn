@@ -1,0 +1,20 @@
+[gd_scene load_steps=3 format=3 uid="uid://cdld37nuhxu3"]
+
+[ext_resource type="Script" path="res://Scripts/player.gd" id="1_f04jf"]
+[ext_resource type="PackedScene" uid="uid://omyog62oq7h4" path="res://Scenes/card.tscn" id="2_k1r3r"]
+
+[node name="Player" type="Node2D"]
+position = Vector2(299, 226)
+script = ExtResource("1_f04jf")
+
+[node name="Skull" parent="." instance=ExtResource("2_k1r3r")]
+unique_name_in_owner = true
+
+[node name="Card2" parent="." instance=ExtResource("2_k1r3r")]
+unique_name_in_owner = true
+
+[node name="Card3" parent="." instance=ExtResource("2_k1r3r")]
+unique_name_in_owner = true
+
+[node name="Card4" parent="." instance=ExtResource("2_k1r3r")]
+unique_name_in_owner = true
