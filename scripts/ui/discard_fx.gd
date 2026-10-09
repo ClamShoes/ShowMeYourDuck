@@ -51,14 +51,18 @@ var _broken := false
 
 
 ## Destroys in place, or (with a finite `to_global`) presents at `to_global` / `to_scale` first.
+## `from_rotation` is the source card's on-screen angle (rotated opponent seats); a present turns
+## it upright.
 static func play(parent: Node, texture: Texture2D, from_global: Vector2, from_scale: float, p_style: String,
-		rng_seed: int = 0, to_global: Vector2 = Vector2.INF, to_scale: float = -1.0) -> Node2D:
+		rng_seed: int = 0, to_global: Vector2 = Vector2.INF, to_scale: float = -1.0,
+		from_rotation: float = 0.0) -> Node2D:
 	var fx = load("res://scripts/ui/discard_fx.gd").new()
 	fx._tex = texture
 	fx.style = p_style if p_style in STYLES else String(STYLES[0])
 	fx._rng.seed = rng_seed if rng_seed != 0 else hash(p_style)
 	parent.add_child(fx)
 	fx.global_position = from_global
+	fx.rotation = wrapf(from_rotation, -PI, PI)
 	fx.scale = Vector2.ONE * from_scale
 	fx._make_card()
 	if to_global.is_finite():
@@ -92,7 +96,7 @@ func _make_card() -> void:
 
 func _present_to(to_global: Vector2, to_scale: float) -> void:
 	_presenting = true
-	rotation = PRESENT_TILT * (1.0 if _rng.randf() < 0.5 else -1.0)
+	rotation += PRESENT_TILT * (1.0 if _rng.randf() < 0.5 else -1.0)
 	var tw := create_tween().set_parallel(true)
 	tw.tween_property(self, "global_position", to_global, PRESENT_SEC).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	tw.tween_property(self, "scale", Vector2.ONE * to_scale, PRESENT_SEC).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)

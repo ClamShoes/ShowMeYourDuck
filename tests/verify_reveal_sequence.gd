@@ -23,10 +23,12 @@ func _check(cond: bool, msg: String) -> bool:
 
 
 ## Commit a flip of the mat's top card and run frames until the sequence finishes.
-## Returns {card, sec, max_scale, max_present, drift_ok, duck_presented}.
+## Returns {card, sec, max_scale, max_present, drift_ok, duck_presented, peak_rot, peak_centre}
+## (peak_* are the card's on-screen angle and centre at its highest present).
 func _reveal(mat, is_duck: bool, cid: String, idx: int, mid_refresh_stack: int = -1) -> Dictionary:
 	var top = mat.top_card()
-	var out := {card = top, sec = 0.0, max_scale = 0.0, max_present = 0.0, drift_ok = false, duck_presented = false}
+	var out := {card = top, sec = 0.0, max_scale = 0.0, max_present = 0.0, drift_ok = false, duck_presented = false,
+		peak_rot = 0.0, peak_centre = Vector2.ZERO}
 	if not _check(top != null, "no top card to flip"):
 		return out
 	var start_pos: Vector2 = top.position
@@ -51,9 +53,13 @@ func _reveal(mat, is_duck: bool, cid: String, idx: int, mid_refresh_stack: int =
 		if not is_instance_valid(top):
 			break
 		out.max_scale = maxf(out.max_scale, top.scale.x)
-		out.max_present = maxf(out.max_present, float(top.present_height))
+		if float(top.present_height) > out.max_present:
+			out.max_present = float(top.present_height)
+			var xf: Transform2D = top.get_global_transform()
+			out.peak_rot = wrapf(xf.get_rotation(), -PI, PI)
+			out.peak_centre = xf * (CardView.SIZE * 0.5)
 		var moved: Vector2 = top.position - start_pos
-		if moved.dot(mat.reveal_dir) > PlayerMatScript.PRESENT_DRIFT * 0.5:
+		if moved.dot(Vector2.UP) > PlayerMatScript.PRESENT_DRIFT * 0.5:
 			out.drift_ok = true
 	out.sec = (Time.get_ticks_msec() - t0) / 1000.0
 	mat.reveal_sequence_finished.disconnect(on_done)
@@ -71,7 +77,6 @@ func _run() -> void:
 	root.add_child(mat)
 	mat.position = Vector2(535, 330)
 	mat.setup("p0", Color.RED)
-	mat.reveal_dir = Vector2.UP
 	mat.refresh(_info(3), true)
 
 	# Safe: fast present, lands in slot 0.
@@ -101,6 +106,26 @@ func _run() -> void:
 			_check(dcard.position.distance_to(mat.reveal_slot_local(1)) < 0.5, "duck should end at reveal slot 1")
 			_check(absf(dcard.scale.x - PlayerMatScript.REVEAL_SCALE) < 0.01, "duck should end at REVEAL_SCALE")
 
+	# Opponent seat across the table (mat upside down): the Duck turns upright and presents at
+	# screen centre, then settles back into the mat's own frame.
+	if _fail == "":
+		var opp = PlayerMatScript.new()
+		root.add_child(opp)
+		opp.position = Vector2(535, 90)
+		opp.rotation = PI
+		opp.setup("p2", Color.GREEN)
+		opp.refresh(_info(1), true)
+		var od := await _reveal(opp, true, "c_opp_duck", 0)
+		var ocard = od.card
+		if _fail == "":
+			var screen_mid: Vector2 = get_root().get_visible_rect().size * 0.5
+			_check(od.duck_presented, "rotated duck should emit duck_presented")
+			_check(absf(od.peak_rot) < 0.15, "rotated duck should present upright, got %s rad" % od.peak_rot)
+			_check(od.peak_centre.distance_to(screen_mid) < 40.0, "rotated duck should present at screen centre, got %s want %s" % [od.peak_centre, screen_mid])
+			_check(ocard.position.distance_to(opp.reveal_slot_local(0)) < 0.5, "rotated duck should end at reveal slot 0")
+			_check(absf(wrapf(ocard.rotation, -PI, PI)) < 0.01, "rotated duck should settle back to the mat's frame, got %s" % ocard.rotation)
+		opp.queue_free()
+
 	# Late sync must not duplicate cards that already landed.
 	if _fail == "":
 		var kids_before: int = mat.get_child_count()
@@ -129,7 +154,6 @@ func _run() -> void:
 		var late = PlayerMatScript.new()
 		root.add_child(late)
 		late.setup("p1", Color.BLUE)
-		late.reveal_dir = Vector2.DOWN
 		late.refresh(_info(1), false)
 		late.sync_parked_reveals([
 			{card_id = "a", owner_id = "p1", is_duck = false},

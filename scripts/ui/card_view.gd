@@ -79,6 +79,11 @@ var reveal_mode: bool = false
 var _dragging := false
 var _hovering := false
 var _remote_hover := false
+## Remote player's pointer (global) while _remote_hover; drives their tilt on this screen.
+var _remote_point: Variant = null
+## Another player is dragging this card: spring `position` (parent space) toward _remote_target.
+var _remote_follow := false
+var _remote_target := Vector2.ZERO
 var _scrubbing := false
 var _settling_face_up := false
 var _place_flipping := false
@@ -198,6 +203,14 @@ func setup(p_id: String, p_is_duck: bool, p_face_up: bool, p_interactable: bool,
 			_set_hover(true)
 	else:
 		_sync_face_visibility()
+
+
+## Another player's hand card: face-down, inert, and its face sprite never knows Duck vs Safe.
+func setup_hidden(p_owner_id: String) -> void:
+	setup("", false, false, false, false, p_owner_id)
+	face_known = false
+	_apply_card_art()
+	mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 
 ## Face-down stack token. Face unknown until set_revealed_face after rules commit.
@@ -473,13 +486,33 @@ func play_deselect() -> void:
 	_set_hover(false)
 
 
-## Mirror another player's hover: same lift/scale/pop, but no lean toward the local mouse.
+## Mirror another player's hover: same lift/scale/pop; the lean follows set_remote_point.
 func set_remote_hover(on: bool) -> void:
 	_remote_hover = on
 	if on and not _hovering:
 		play_select()
 	elif not on:
+		_remote_point = null
 		_set_hover(false)
+
+
+func set_remote_point(global_pt: Vector2) -> void:
+	_remote_point = global_pt
+
+
+## Another player is dragging this card: follow `target` (top-left, parent space) on a spring.
+func follow_remote(target: Vector2) -> void:
+	if not _remote_follow:
+		_remote_follow = true
+		_set_hover(false)
+		_drag_pos = position
+		_drag_vel = Vector2.ZERO
+		juice()
+	_remote_target = target
+
+
+func stop_follow() -> void:
+	_remote_follow = false
 
 
 func play_quiver() -> void:
@@ -708,6 +741,7 @@ func _restore_hand_parent() -> void:
 
 
 ## Hold-drag: dx scrubs 0..SCRUB_END_SEC; at full window emit reveal_released.
+## dx is screen-space on purpose: on a rotated opponent mat the gesture stays left/right for the viewer.
 func _handle_reveal_input(event: InputEvent) -> void:
 	if not interactable:
 		return
@@ -755,16 +789,22 @@ func _process(delta: float) -> void:
 			_anim.play(FLIP_ANIM)
 			_anim.seek(_anim_time, true)
 			_anim.play()
+	elif _remote_follow:
+		_spring_drag(_remote_target, delta)
+		position = _drag_pos
 	_update_visual(delta)
 
 
 ## Springy follow: the card trails the mouse and swings toward its direction of travel.
 func _step_drag(delta: float) -> void:
-	var target := get_global_mouse_position() - SIZE * 0.5
+	_spring_drag(get_global_mouse_position() - SIZE * 0.5, delta)
+	global_position = _drag_pos
+
+
+func _spring_drag(target: Vector2, delta: float) -> void:
 	var r := CardJuice.spring_v2(_drag_pos, _drag_vel, target, drag_spring_k, drag_spring_damping, delta)
 	_drag_pos = r[0]
 	_drag_vel = r[1]
-	global_position = _drag_pos
 
 
 func _flip_active() -> bool:
@@ -788,7 +828,8 @@ func _update_visual(delta: float) -> void:
 		return
 	_time += delta
 	var flipping := _flip_active()
-	var hovered := _hovering and not _dragging and not flipping
+	var held := _dragging or _remote_follow
+	var hovered := _hovering and not held and not flipping
 
 	var r := CardJuice.spring(_lift, _lift_v, -hover_lift if hovered else 0.0, spring_k, spring_damping, delta)
 	_lift = r.x
@@ -798,8 +839,9 @@ func _update_visual(delta: float) -> void:
 	_hscale_v = r.y
 
 	var tilt_target := Vector2.ZERO
-	if hovered and not _remote_hover:
-		var n := (get_local_mouse_position() - SIZE * 0.5) / (SIZE * 0.5)
+	if hovered and (not _remote_hover or _remote_point != null):
+		var local := get_local_mouse_position() if not _remote_hover else get_global_transform().affine_inverse() * Vector2(_remote_point)
+		var n := (local - SIZE * 0.5) / (SIZE * 0.5)
 		n = n.clamp(Vector2(-1, -1), Vector2(1, 1))
 		tilt_target = Vector2(n.y, -n.x) * tilt_max_deg
 	var rt := CardJuice.spring_v2(_tilt, _tilt_v, tilt_target, spring_k, spring_damping, delta)
@@ -807,13 +849,13 @@ func _update_visual(delta: float) -> void:
 	_tilt_v = rt[1]
 
 	var sway_target := 0.0
-	if _dragging:
+	if held:
 		sway_target = clampf(_drag_vel.x * sway_per_speed, -sway_max_deg, sway_max_deg)
 	r = CardJuice.spring(_sway, _sway_v, sway_target, spring_k, spring_damping, delta)
 	_sway = r.x
 	_sway_v = r.y
 
-	_idle_w = move_toward(_idle_w, 0.0 if (_dragging or flipping) else 1.0, delta * 3.0)
+	_idle_w = move_toward(_idle_w, 0.0 if (held or flipping) else 1.0, delta * 3.0)
 	var bob := idle_bob_px * sin(_time * idle_speed + _idle_phase) * _idle_w
 	var rock := idle_rock_deg * sin(_time * idle_speed * 0.7 + _idle_phase * 1.3) * _idle_w
 
@@ -853,7 +895,7 @@ func _update_visual(delta: float) -> void:
 	if vp.x > 0.0:
 		dx = (global_position.x + SIZE.x * 0.5 - vp.x * 0.5) / (vp.x * 0.5)
 	var shadow_off := SHADOW_OFFSET + Vector2(dx * 6.0, height * 0.5)
-	if _dragging:
+	if held:
 		shadow_off += Vector2(dx * 6.0, 10.0)
 	var a := shadow_alpha * clampf(1.0 - height / 60.0, 0.5, 1.0)
 	for sh in [_shadow_back, _shadow_front]:

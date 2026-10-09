@@ -7,8 +7,11 @@ const CardCatalog = preload("res://scripts/ui/card_catalog.gd")
 const DuckDrawing = preload("res://scripts/ui/duck_drawing.gd")
 const PlayerCosmetics = preload("res://scripts/ui/player_cosmetics.gd")
 const DuckStamps = preload("res://scripts/ui/duck_stamps.gd")
+const ScreenFit = preload("res://scripts/ui/screen_fit.gd")
 
 const ALPHABET := "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+const HAND_FX_TYPES := ["hover", "drag", "gap", "drop", "place"]
+const CURSOR_LOCAL_MAX := Vector2(4096, 4096)
 
 var rooms: Dictionary = {}
 var peer_room: Dictionary = {}
@@ -267,6 +270,60 @@ func validate_discard_hover_relay(peer_id: int, slot: int) -> Dictionary:
 		if int(pid) != peer_id:
 			others.append(int(pid))
 	return {"ok": true, "code": String(room.code), "peer_ids": others}
+
+
+## Presentation relay for a player's own hand (hover / drag / gap / drop / place). Slots only —
+## card ids name the card ("p3_duck"), so the relayed event is rebuilt from known keys.
+## Returns { ok, code, peer_ids, player_id, ev } on success.
+func validate_hand_fx_relay(peer_id: int, ev: Dictionary) -> Dictionary:
+	var room := _room_of(peer_id)
+	if room.is_empty() or room.state == null:
+		return {"ok": false, "error": "No match"}
+	var t: Variant = ev.get("t")
+	if typeof(t) != TYPE_STRING or not HAND_FX_TYPES.has(t):
+		return {"ok": false, "error": "Unknown hand event"}
+	var slot: Variant = ev.get("slot", -1)
+	if typeof(slot) != TYPE_INT:
+		return {"ok": false, "error": "Bad slot"}
+	var player_id: String = String(room.peers[peer_id].player_id)
+	if not room.state.players.has(player_id):
+		return {"ok": false, "error": "Not seated"}
+	if slot < -1 or slot > room.state.players[player_id].hand.size():
+		return {"ok": false, "error": "No such slot"}
+	return {
+		"ok": true, "code": String(room.code), "peer_ids": _other_peers(room, peer_id),
+		"player_id": player_id, "ev": {"t": t, "slot": slot},
+	}
+
+
+## Presentation relay for a mouse pointer in seat space ("hand:<pid>", "mat:<pid>" or "centre").
+## `area` is the sender's safe rect (their seat layout space). Returns { ok, code, peer_ids,
+## player_id, local, area } on success.
+func validate_cursor_relay(peer_id: int, anchor: String, local: Vector2, area: Rect2) -> Dictionary:
+	var room := _room_of(peer_id)
+	if room.is_empty() or room.state == null:
+		return {"ok": false, "error": "No match"}
+	if not area.is_finite():
+		return {"ok": false, "error": "Bad area"}
+	var size := area.size.clamp(ScreenFit.BASE, ScreenFit.BASE * 4.0)
+	if anchor != "centre":
+		var parts := anchor.split(":")
+		if parts.size() != 2 or not (parts[0] == "hand" or parts[0] == "mat") or not room.state.players.has(parts[1]):
+			return {"ok": false, "error": "Unknown anchor"}
+	return {
+		"ok": true, "code": String(room.code), "peer_ids": _other_peers(room, peer_id),
+		"player_id": String(room.peers[peer_id].player_id),
+		"local": local.clamp(-CURSOR_LOCAL_MAX, CURSOR_LOCAL_MAX),
+		"area": Rect2(area.position.clamp(Vector2.ZERO, size), size),
+	}
+
+
+func _other_peers(room: Dictionary, peer_id: int) -> Array:
+	var others: Array = []
+	for pid in room.peers.keys():
+		if int(pid) != peer_id:
+			others.append(int(pid))
+	return others
 
 
 func _room_of(peer_id: int) -> Dictionary:
