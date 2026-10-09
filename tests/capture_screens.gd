@@ -1,7 +1,8 @@
 extends SceneTree
 
 ## Windowed layout check for phone/tablet aspect ratios. Saves user://screens/<screen>_WxH.png for the
-## lobby, duck editor, card picker, a 4-player table after everyone placed a card, and the stamp picker.
+## lobby, duck editor, card picker, a 4-player table after everyone placed a card, the stamp picker,
+## and the tutorial's first move and its Pass step.
 ## Run once per size, e.g.:
 ##   godot --path . --resolution 1600x720 --script tests/capture_screens.gd
 ## Sizes worth checking: 1280x720 (16:9), 1600x720 (20:9), 1560x720 (19.5:9), 1280x800 (16:10), 1280x960 (4:3).
@@ -50,6 +51,22 @@ func _run() -> void:
 	await _save("table")
 	table._stamp_picker.open(["top_hat", "monocle", "cane"], null)
 	await _save("stamp")
+	table.queue_free()
+
+	net.start_tutorial("You", {}, null)
+	table = load("res://scenes/table.tscn").instantiate()
+	root.add_child(table)
+	net.tutorial.press_button()
+	await _save("tutorial")
+	var hand: Array = net.last_snapshot.you.hand
+	for card in hand:
+		if card.is_duck:
+			net.submit_intent({"type": "place_card", "card_id": String(card.id)})
+	for _i in 600:
+		if net.tutorial.target() == "pass":
+			break
+		await process_frame
+	await _save("tutorial_pass")
 	print("saved screenshots to ", ProjectSettings.globalize_path("user://screens"))
 	quit(0)
 

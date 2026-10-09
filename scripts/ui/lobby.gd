@@ -110,6 +110,12 @@ func _build() -> void:
 	join.pressed.connect(_join_room)
 	join_row.add_child(join)
 
+	var how := Button.new()
+	how.text = "How to play"
+	how.custom_minimum_size = Vector2(0, TOUCH_PX)
+	how.pressed.connect(func(): Net.start_tutorial(_display_name(), _cosmetics, _duck_img))
+	form.add_child(how)
+
 	_status = Label.new()
 	_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	form.add_child(_status)

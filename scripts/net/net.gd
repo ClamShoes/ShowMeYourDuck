@@ -20,6 +20,7 @@ const DuckServerScript = preload("res://scripts/net/server.gd")
 const DuckDrawing = preload("res://scripts/ui/duck_drawing.gd")
 const CardArt = preload("res://scripts/ui/card_art.gd")
 const HelloScript = preload("res://scripts/net/hello.gd")
+const TutorialScript = preload("res://scripts/tutorial/tutorial.gd")
 const DEFAULT_PORT := 9080
 ## Phone/tablet builds can't run a local server; they join the same rooms as the web build.
 const LIVE_SERVER_URL := "wss://showmeyourduck.paff.me/ws"
@@ -52,6 +53,8 @@ var _spawn_attempted := false
 var _hello: Node
 ## Bumped per handshake so a stale timeout can't fail a later connection.
 var _hello_seq := 0
+## Offline "How to play" session (scripts/tutorial/tutorial.gd); intents go here instead of a server.
+var tutorial: Node = null
 
 
 func _ready() -> void:
@@ -119,7 +122,7 @@ func connect_and_join(code: String, display_name: String, cosmetics: Dictionary 
 
 
 func _is_client_connected() -> bool:
-	if _is_server:
+	if _is_server or tutorial != null:
 		return false
 	var peer = multiplayer.multiplayer_peer
 	if peer == null:
@@ -341,9 +344,36 @@ func return_to_lobby() -> void:
 
 
 func submit_intent(intent: Dictionary) -> void:
+	if tutorial != null:
+		tutorial.submit(intent)
+		return
 	if not _is_client_connected():
 		return
 	rpc_id(1, "s_intent", intent)
+
+
+## Whether the table may start animating this move (always, outside the tutorial).
+func allows(intent: Dictionary) -> bool:
+	return tutorial == null or tutorial.allows(intent)
+
+
+func is_tutorial() -> bool:
+	return tutorial != null
+
+
+## Leaves any room and starts the offline tutorial; the lobby opens the table on match_started.
+func start_tutorial(display_name: String, cosmetics: Dictionary, duck: Image) -> void:
+	leave_room()
+	player_id = TutorialScript.YOU
+	tutorial = TutorialScript.new()
+	tutorial.name = "Tutorial"
+	add_child(tutorial)
+	var looks := cosmetics.duplicate()
+	if duck != null:
+		looks["duck_rev"] = 1
+		CardArt.set_duck_image(TutorialScript.YOU, 1, duck)
+	tutorial.start(display_name, looks)
+	match_started.emit()
 
 
 func send_reveal_progress(target_player_id: String, t: float) -> void:
@@ -377,7 +407,10 @@ func send_cursor(anchor: String, local: Vector2, area: Rect2) -> void:
 
 
 func leave_room() -> void:
-	if _is_client_connected():
+	if tutorial != null:
+		tutorial.queue_free()
+		tutorial = null
+	elif _is_client_connected():
 		rpc_id(1, "s_leave")
 	room_code = ""
 	player_id = ""

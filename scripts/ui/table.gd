@@ -16,6 +16,7 @@ const ScreenFit = preload("res://scripts/ui/screen_fit.gd")
 const SeatSpace = preload("res://scripts/ui/seat_space.gd")
 const OpponentHandScript = preload("res://scripts/ui/opponent_hand.gd")
 const RemoteCursorsScript = preload("res://scripts/ui/remote_cursors.gd")
+const TutorialOverlayScript = preload("res://scripts/ui/tutorial_overlay.gd")
 
 ## Minimum height for buttons pressed during play, so they're tappable on phones.
 const TOUCH_PX := 48.0
@@ -132,6 +133,14 @@ func _ready() -> void:
 	Net.cursor_moved.connect(_on_remote_cursor)
 	# Mid-match the server only sends a lobby update when the room has gone back to its lobby.
 	Net.lobby_updated.connect(_on_back_to_lobby)
+	if Net.is_tutorial():
+		var tutorial_canvas := CanvasLayer.new()
+		tutorial_canvas.layer = 220
+		add_child(tutorial_canvas)
+		var overlay = TutorialOverlayScript.new()
+		tutorial_canvas.add_child(overlay)
+		overlay.setup(Net.tutorial, _tutorial_target_rect)
+		overlay.leave_requested.connect(_leave)
 	_queue_render()
 
 
@@ -341,9 +350,43 @@ func _queue_render() -> void:
 
 
 func _submit(intent: Dictionary) -> Dictionary:
-	Net.submit_intent(intent)
+	# Cleared first: the tutorial refuses a move with a notice during submit_intent.
 	_error.text = ""
+	Net.submit_intent(intent)
 	return {"ok": true, "error": ""}
+
+
+## Global rect of what the tutorial step points at (empty when it isn't on screen right now).
+func _tutorial_target_rect(target: String) -> Rect2:
+	var r := Rect2()
+	match target:
+		"hand", "hand_duck", "hand_safe":
+			for child in _hand_box.get_children():
+				if child == _hand_spacer or child.is_queued_for_deletion() or child.get("card_id") == null:
+					continue
+				if target == "hand" or bool(child.is_duck) == (target == "hand_duck"):
+					r = child.get_global_rect() if r.size == Vector2.ZERO else r.merge(child.get_global_rect())
+		"bid":
+			if _bid_row.visible:
+				r = _bid_row.get_global_rect()
+		"pass":
+			if _bid_row.visible:
+				r = _bid_row.get_child(4).get_global_rect()
+		"next_round":
+			if _next_round_btn.visible:
+				r = _next_round_btn.get_global_rect()
+		"pick":
+			if _pick_row != null:
+				for i in _pick_row.slot_count():
+					var card = _pick_row.card_at(i)
+					if card != null:
+						var cr: Rect2 = card.get_global_transform() * Rect2(Vector2.ZERO, CardView.SIZE)
+						r = cr if r.size == Vector2.ZERO else r.merge(cr)
+		_:
+			var mat = _mats.get(target.trim_prefix("mat:")) if target.begins_with("mat:") else null
+			if mat != null:
+				r = mat.get_global_transform() * Rect2(Vector2.ZERO, PlayerMatScript.MAT_SIZE)
+	return r
 
 
 func _render() -> void:
@@ -1226,7 +1269,11 @@ func _on_card_dropped(card, at: Vector2) -> void:
 
 	var viewer := _viewer_id()
 	var mat = _mats.get(viewer)
-	if mat and mat.contains_point(at) and _can_play(snap, viewer):
+	var placing: bool = mat and mat.contains_point(at) and _can_play(snap, viewer)
+	if placing and not Net.allows(GameProtocol.place_card(card.card_id)):
+		_submit(GameProtocol.place_card(card.card_id)) # refused: shows the tutorial's hint
+		placing = false
+	if placing:
 		# Before the intent: both are reliable, so opponents start the flight before the snapshot.
 		Net.send_hand_fx("place", -1)
 		_submit(GameProtocol.place_card(card.card_id))
@@ -1354,7 +1401,10 @@ func _on_stack_reveal_released(mat, card, t: float) -> void:
 		_reveal_send_t = -1.0
 		return
 	# t is scrub-window progress 0..1 (1.0 == Card_Flip at SCRUB_END_SEC).
-	if t < 1.0:
+	var refused := t >= 1.0 and not Net.allows(GameProtocol.flip(String(mat.player_id)))
+	if refused:
+		_submit(GameProtocol.flip(String(mat.player_id))) # refused: shows the tutorial's hint
+	if t < 1.0 or refused:
 		if card and card.has_method("abort_flip"):
 			card.abort_flip()
 		Net.send_reveal_cancel(String(mat.player_id))

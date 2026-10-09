@@ -71,3 +71,5 @@ The app joins the same live server (and the same rooms) as the web build at [sho
 ```
 Godot_v4.7.2\Godot_v4.7.2-stable_win64_console.exe --headless --path . -s res://tests/run_tests.gd
 ```
+
+The "How to play" tutorial (`scripts/tutorial/tutorial.gd`) is a scripted offline game. If you change the rules, check that it still plays through: `... --headless --path . -s res://tests/verify_tutorial.gd`.
