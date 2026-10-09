@@ -10,6 +10,7 @@ const CardArt = preload("res://scripts/ui/card_art.gd")
 const DuckDrawing = preload("res://scripts/ui/duck_drawing.gd")
 const DuckStamps = preload("res://scripts/ui/duck_stamps.gd")
 const CardPickerScript = preload("res://scripts/ui/card_picker.gd")
+const ScreenFit = preload("res://scripts/ui/screen_fit.gd")
 
 const ZOOM := 3
 const MIN_SCALE := 0.4
@@ -157,7 +158,7 @@ func _build() -> void:
 	_panel.position = Vector2(140, 40)
 	_panel.size = Vector2(1000, 640)
 	_panel.add_theme_stylebox_override("panel", CardPickerScript.overlay_style())
-	add_child(_panel)
+	ScreenFit.centred_stage(self).add_child(_panel)
 
 	_offer_box = Control.new()
 	_offer_box.set_anchors_preset(PRESET_FULL_RECT)
@@ -202,7 +203,7 @@ func _build() -> void:
 	tools.add_theme_constant_override("separation", 10)
 	_place_box.add_child(tools)
 	var hint := Label.new()
-	hint.text = "Drag to move it.\nScroll to resize."
+	hint.text = "Drag to move it.\nScroll or use the buttons to resize."
 	tools.add_child(hint)
 	for spec in [
 		["Rotate left  (Q)", rotate_step.bind(-1)],
@@ -213,7 +214,7 @@ func _build() -> void:
 	]:
 		var b := Button.new()
 		b.text = spec[0]
-		b.custom_minimum_size = Vector2(220, 40)
+		b.custom_minimum_size = Vector2(220, 48)
 		b.pressed.connect(spec[1])
 		tools.add_child(b)
 	_place_box.add_child(_button("Later", Vector2(700, 580), minimise))
@@ -313,7 +314,7 @@ func _button(text: String, pos: Vector2, cb: Callable) -> Button:
 	var b := Button.new()
 	b.text = text
 	b.position = pos
-	b.size = Vector2(130, 40)
+	b.size = Vector2(130, 48)
 	b.pressed.connect(cb)
 	return b
 

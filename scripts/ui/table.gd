@@ -12,6 +12,12 @@ const StampPickerScript = preload("res://scripts/ui/stamp_picker.gd")
 const DuckDrawing = preload("res://scripts/ui/duck_drawing.gd")
 const DuckStamps = preload("res://scripts/ui/duck_stamps.gd")
 const PlayerCosmetics = preload("res://scripts/ui/player_cosmetics.gd")
+const ScreenFit = preload("res://scripts/ui/screen_fit.gd")
+
+## Minimum height for buttons pressed during play, so they're tappable on phones.
+const TOUCH_PX := 48.0
+const HAND_SIZE := Vector2(720, 150)
+const BID_ROW_SIZE := Vector2(420, 48)
 
 const SEAT_COLORS := [
 	Color("e07a3d"),
@@ -26,6 +32,8 @@ const PLACE_FLIGHT_SEC := 0.45
 
 var _bid_amount := 1
 var _status: Label
+var _leave_btn: Button
+var _board_panel: PanelContainer
 var _banner: Label
 var _hand_box: HBoxContainer
 var _scoreboard: VBoxContainer
@@ -85,6 +93,7 @@ var _shake_base: Array = []
 func _ready() -> void:
 	set_anchors_preset(PRESET_FULL_RECT)
 	_build_chrome()
+	get_viewport().size_changed.connect(_on_screen_resized)
 	Net.match_updated.connect(_on_net_update)
 	if not Net.notice.is_connected(_on_net_notice):
 		Net.notice.connect(_on_net_notice)
@@ -116,21 +125,15 @@ func _build_chrome() -> void:
 	add_child(bg)
 
 	_status = Label.new()
-	_status.position = Vector2(24, 12)
-	_status.size = Vector2(900, 36)
 	_status.add_theme_font_size_override("font_size", 22)
 	add_child(_status)
 
-	var back := Button.new()
-	back.text = "Leave"
-	back.position = Vector2(1140, 12)
-	back.size = Vector2(110, 36)
-	back.pressed.connect(_leave)
-	add_child(back)
+	_leave_btn = Button.new()
+	_leave_btn.text = "Leave"
+	_leave_btn.pressed.connect(_leave)
+	add_child(_leave_btn)
 
 	_banner = Label.new()
-	_banner.position = Vector2(24, 48)
-	_banner.size = Vector2(1230, 28)
 	_banner.add_theme_color_override("font_color", Color("f4d35e"))
 	add_child(_banner)
 
@@ -140,27 +143,26 @@ func _build_chrome() -> void:
 	add_child(_mats_root)
 
 	_hand_box = HBoxContainer.new()
-	_hand_box.position = Vector2(280, 560)
-	_hand_box.size = Vector2(720, 150)
+	_hand_box.size = HAND_SIZE
 	_hand_box.alignment = BoxContainer.ALIGNMENT_CENTER
 	add_child(_hand_box)
 
-	# Bottom-right, growing up/left as rows are added; clear of the hand (ends x 1000).
-	var board_panel := PanelContainer.new()
+	# Bottom-right, growing up/left as rows are added; clear of the hand.
+	_board_panel = PanelContainer.new()
 	var board_sb := StyleBoxFlat.new()
 	board_sb.bg_color = Color(0, 0, 0, 0.28)
 	board_sb.set_corner_radius_all(8)
 	board_sb.set_content_margin_all(8)
-	board_panel.add_theme_stylebox_override("panel", board_sb)
-	board_panel.custom_minimum_size = Vector2(220, 0)
-	board_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(board_panel)
-	board_panel.set_anchors_and_offsets_preset(PRESET_BOTTOM_RIGHT, PRESET_MODE_MINSIZE, 12)
-	board_panel.grow_horizontal = Control.GROW_DIRECTION_BEGIN
-	board_panel.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	_board_panel.add_theme_stylebox_override("panel", board_sb)
+	_board_panel.custom_minimum_size = Vector2(220, 0)
+	_board_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_board_panel)
+	_board_panel.set_anchors_and_offsets_preset(PRESET_BOTTOM_RIGHT, PRESET_MODE_MINSIZE, 12)
+	_board_panel.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	_board_panel.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	_scoreboard = VBoxContainer.new()
 	_scoreboard.add_theme_constant_override("separation", 4)
-	board_panel.add_child(_scoreboard)
+	_board_panel.add_child(_scoreboard)
 
 	# Separate canvas layer so dragged cards always paint above mats/hand/UI.
 	_drag_canvas = CanvasLayer.new()
@@ -172,38 +174,37 @@ func _build_chrome() -> void:
 	_drag_canvas.add_child(_drag_layer)
 
 	_bid_row = HBoxContainer.new()
-	_bid_row.position = Vector2(430, 508)
-	_bid_row.size = Vector2(420, 44)
+	_bid_row.size = BID_ROW_SIZE
 	_bid_row.add_theme_constant_override("separation", 8)
 	add_child(_bid_row)
 
 	var minus := Button.new()
 	minus.text = "-"
-	minus.custom_minimum_size = Vector2(40, 40)
+	minus.custom_minimum_size = Vector2(TOUCH_PX, TOUCH_PX)
 	minus.pressed.connect(func(): _bid_amount = max(1, _bid_amount - 1); _sync_bid_label())
 	_bid_row.add_child(minus)
 
 	_bid_label = Label.new()
-	_bid_label.custom_minimum_size = Vector2(80, 40)
+	_bid_label.custom_minimum_size = Vector2(80, TOUCH_PX)
 	_bid_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_bid_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_bid_row.add_child(_bid_label)
 
 	var plus := Button.new()
 	plus.text = "+"
-	plus.custom_minimum_size = Vector2(40, 40)
+	plus.custom_minimum_size = Vector2(TOUCH_PX, TOUCH_PX)
 	plus.pressed.connect(func(): _bid_amount += 1; _sync_bid_label())
 	_bid_row.add_child(plus)
 
 	var bid_btn := Button.new()
 	bid_btn.text = "Bid"
-	bid_btn.custom_minimum_size = Vector2(80, 40)
+	bid_btn.custom_minimum_size = Vector2(80, TOUCH_PX)
 	bid_btn.pressed.connect(_on_bid_pressed)
 	_bid_row.add_child(bid_btn)
 
 	var pass_btn := Button.new()
 	pass_btn.text = "Pass"
-	pass_btn.custom_minimum_size = Vector2(80, 40)
+	pass_btn.custom_minimum_size = Vector2(80, TOUCH_PX)
 	pass_btn.pressed.connect(func(): _submit(GameProtocol.pass_bid()))
 	_bid_row.add_child(pass_btn)
 
@@ -229,14 +230,52 @@ func _build_chrome() -> void:
 	# 	_build_discard_demo()
 
 	_error = Label.new()
-	_error.position = Vector2(24, 680)
-	_error.size = Vector2(1230, 28)
 	_error.add_theme_color_override("font_color", Color("ff8a7a"))
 	add_child(_error)
+	_layout_chrome()
+
+
+## Pins the chrome to the edges of the screen's safe area; mats follow via seat_layout.
+func _layout_chrome() -> void:
+	var safe := ScreenFit.safe_rect(get_viewport())
+	var left := safe.position.x + 24.0
+	var right := safe.end.x
+	_status.position = Vector2(left, safe.position.y + 12.0)
+	_status.size = Vector2(right - 140.0 - left, 36)
+	_leave_btn.position = Vector2(right - 140.0, safe.position.y + 12.0)
+	_leave_btn.size = Vector2(110, TOUCH_PX)
+	_banner.position = Vector2(left, safe.position.y + 48.0)
+	_banner.size = Vector2(right - 26.0 - left, 28)
+	var mid_x := safe.get_center().x
+	_hand_box.position = Vector2(mid_x - HAND_SIZE.x * 0.5, safe.end.y - 160.0).round()
+	_bid_row.position = Vector2(mid_x - BID_ROW_SIZE.x * 0.5, _hand_box.position.y - TOUCH_PX - 8.0).round()
+	_error.position = Vector2(left, safe.end.y - 40.0)
+	_error.size = Vector2(right - 26.0 - left, 28)
+	var vp := get_viewport_rect().size
+	_board_panel.offset_right = -(vp.x - safe.end.x) - 12.0
+	_board_panel.offset_bottom = -(vp.y - safe.end.y) - 12.0
+
+
+func _on_screen_resized() -> void:
+	if _shake_tween and _shake_tween.is_valid():
+		_shake_tween.kill()
+		_apply_table_shake(0.0)
+	_layout_chrome()
+	_queue_render()
 
 
 func _on_net_update(_snap: Dictionary) -> void:
 	_queue_render()
+
+
+## Android back button: tuck the stamp picker away first, otherwise leave the table.
+func _notification(what: int) -> void:
+	if what != NOTIFICATION_WM_GO_BACK_REQUEST:
+		return
+	if _stamp_picker != null and _stamp_picker.is_active() and not _stamp_picker.is_minimised():
+		_stamp_picker.minimise()
+	else:
+		_leave()
 
 
 func _leave() -> void:
@@ -587,7 +626,7 @@ func _layout_mats(snap: Dictionary, viewer: String) -> void:
 			if is_instance_valid(old):
 				old.queue_free()
 	var n := ids.size()
-	var seats := PlayerMatScript.seat_layout(n)
+	var seats := PlayerMatScript.seat_layout(n, ScreenFit.safe_rect(get_viewport()))
 	var phase := int(snap.phase)
 	var challenger := String(snap.get("challenger_id", ""))
 	var own_stack_left := 0

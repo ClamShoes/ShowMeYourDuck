@@ -63,6 +63,7 @@ func _init() -> void:
 	_run("unrevealed_token_uses_blank_face", test_unrevealed_token_uses_blank_face)
 	_run("stack_fan_is_even_and_fits_mat", test_stack_fan_is_even_and_fits_mat)
 	_run("reveal_rows_fit_screen_and_clear_stack", test_reveal_rows_fit_screen_and_clear_stack)
+	_run("seats_clear_hand_on_every_screen", test_seats_clear_hand_on_every_screen)
 	_run("duck_drawing_decode_validates", test_duck_drawing_decode_validates)
 	_run("server_duck_drawing_lobby_only_and_in_snapshot", test_server_duck_drawing_lobby_only_and_in_snapshot)
 	_run("card_art_uses_custom_duck_for_matching_rev", test_card_art_uses_custom_duck_for_matching_rev)
@@ -1270,11 +1271,37 @@ func _token_rect(mat_pos: Vector2, i: int) -> Rect2:
 	return Rect2(mat_pos + PlayerMatScript.slot_local(i) + shrink, CardView.SIZE * PlayerMatScript.TOKEN_SCALE)
 
 
+## Logical viewport sizes under canvas_items + expand: 16:9, 20:9, 19.5:9, 16:10, 4:3.
+const SCREEN_SIZES := [Vector2(1280, 720), Vector2(1600, 720), Vector2(1560, 720), Vector2(1280, 800), Vector2(1280, 960)]
+
+
 func test_reveal_rows_fit_screen_and_clear_stack() -> String:
+	for size in SCREEN_SIZES:
+		var err := _check_reveal_rows(Rect2(Vector2.ZERO, size))
+		if err != "":
+			return "%s: %s" % [size, err]
+	return ""
+
+
+func test_seats_clear_hand_on_every_screen() -> String:
+	for size in SCREEN_SIZES:
+		var screen := Rect2(Vector2.ZERO, size)
+		# Bid row top to hand bottom, matching table._layout_chrome.
+		var hand_zone := Rect2(size.x * 0.5 - 360.0, size.y - 216.0, 720, 206)
+		for n in range(1, 7):
+			for s in PlayerMatScript.seat_layout(n, screen):
+				var mat := Rect2(s.pos, PlayerMatScript.MAT_SIZE)
+				if not screen.encloses(mat):
+					return "%s %dp: mat %s leaves the screen" % [size, n, mat]
+				if mat.intersects(hand_zone):
+					return "%s %dp: mat %s overlaps the hand/bid row" % [size, n, mat]
+	return ""
+
+
+func _check_reveal_rows(screen: Rect2) -> String:
 	var max_cards := GameTypes.SAFE_PER_PLAYER + 1
-	var screen := Rect2(0, 0, 1280, 720)
 	for n in range(2, 7):
-		var seats: Array = PlayerMatScript.seat_layout(n)
+		var seats: Array = PlayerMatScript.seat_layout(n, screen)
 		for s in seats:
 			for i in max_cards:
 				var r := _reveal_rect(s.pos, s.dir, i)

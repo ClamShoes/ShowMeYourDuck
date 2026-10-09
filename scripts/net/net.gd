@@ -14,9 +14,16 @@ signal duck_art_updated(player_id: String)
 const DuckServerScript = preload("res://scripts/net/server.gd")
 const DuckDrawing = preload("res://scripts/ui/duck_drawing.gd")
 const CardArt = preload("res://scripts/ui/card_art.gd")
+const HelloScript = preload("res://scripts/net/hello.gd")
 const DEFAULT_PORT := 9080
+## Phone/tablet builds can't run a local server; they join the same rooms as the web build.
+const LIVE_SERVER_URL := "wss://showmeyourduck.paff.me/ws"
+## Bump whenever any RPC or snapshot shape changes; server, web and app builds must match.
+const PROTOCOL_VERSION := 1
 ## Duck PNGs (up to DuckDrawing.MAX_BYTES each) can queue together on join; default is 64 KiB.
 const WS_BUFFER_BYTES := 1 << 20
+## Servers older than the handshake never answer it.
+const HELLO_TIMEOUT_SEC := 5.0
 
 var server_url := "ws://127.0.0.1:%s" % DEFAULT_PORT
 var room_code := ""
@@ -37,12 +44,20 @@ var _server_pid := -1
 var _connect_tries := 0
 var _retrying := false
 var _spawn_attempted := false
+var _hello: Node
+## Bumped per handshake so a stale timeout can't fail a later connection.
+var _hello_seq := 0
 
 
 func _ready() -> void:
+	_hello = HelloScript.new()
+	_hello.name = "Hello"
+	add_child(_hello)
 	# Web build talks to the server behind the site it was loaded from (Caddy proxies /ws).
 	if OS.has_feature("web"):
 		server_url = "wss://%s/ws" % str(JavaScriptBridge.eval("location.host"))
+	elif OS.has_feature("mobile"):
+		server_url = LIVE_SERVER_URL
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--server-url="):
 			server_url = arg.get_slice("=", 1)
@@ -154,7 +169,24 @@ func _connect_watchdog(try_id: int) -> void:
 func _on_connected() -> void:
 	_retrying = false
 	_connect_tries = 0
-	_finish_pending()
+	# The server's hello reply carries on with _finish_pending.
+	_hello_seq += 1
+	_hello.rpc_id(1, "hello", PROTOCOL_VERSION)
+	get_tree().create_timer(HELLO_TIMEOUT_SEC).timeout.connect(_hello_timeout.bind(_hello_seq), CONNECT_ONE_SHOT)
+
+
+func _hello_timeout(seq: int) -> void:
+	if seq != _hello_seq or _pending_action == "":
+		return
+	_hello_failed(PROTOCOL_VERSION - 1)
+
+
+func _hello_failed(server_version: int) -> void:
+	_hello_seq += 1
+	_pending_action = ""
+	multiplayer.set_deferred("multiplayer_peer", null)
+	var app_older := server_version > PROTOCOL_VERSION
+	connection_failed.emit("This copy of the game is out of date - please update it." if app_older else "The server is being updated - try again in a few minutes.")
 
 
 func _on_connection_failed() -> void:
@@ -167,6 +199,9 @@ func _on_connection_failed() -> void:
 		get_tree().create_timer(0.4).timeout.connect(_begin_client_connect, CONNECT_ONE_SHOT)
 		return
 	_retrying = false
+	if OS.has_feature("mobile"):
+		connection_failed.emit("Could not reach the game server. Check your internet connection.")
+		return
 	connection_failed.emit("Could not reach %s. Run run_server.bat and keep that window open." % server_url)
 
 
@@ -332,6 +367,20 @@ func leave_room() -> void:
 	is_host = false
 	last_snapshot = {}
 	lobby_players = []
+
+
+## From the Hello child: the server answers with its version; the client carries on or gives up.
+func _on_hello(sender: int, version: int) -> void:
+	if _is_server:
+		_hello.rpc_id(sender, "hello", PROTOCOL_VERSION)
+		return
+	if sender != 1:
+		return
+	if version != PROTOCOL_VERSION:
+		_hello_failed(version)
+		return
+	_hello_seq += 1
+	_finish_pending()
 
 
 @rpc("any_peer", "reliable")

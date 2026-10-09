@@ -6,6 +6,8 @@ const CardArt = preload("res://scripts/ui/card_art.gd")
 const DuckDrawing = preload("res://scripts/ui/duck_drawing.gd")
 const CardPickerScript = preload("res://scripts/ui/card_picker.gd")
 const DuckEditorScript = preload("res://scripts/ui/duck_editor.gd")
+const ScreenFit = preload("res://scripts/ui/screen_fit.gd")
+const TOUCH_PX := 48.0
 
 const THUMB_BACK := Vector2(24, 32)
 const THUMB_DUCK := Vector2(29, 35)
@@ -54,42 +56,43 @@ func _build() -> void:
 	bg.color = Color("0f2e2c")
 	bg.set_anchors_preset(PRESET_FULL_RECT)
 	add_child(bg)
+	var stage := ScreenFit.centred_stage(self)
 
 	var title := Label.new()
 	title.text = "Show me your duck"
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.position = Vector2(0, 48)
-	title.size = Vector2(1280, 64)
+	title.size = Vector2(ScreenFit.BASE.x, 64)
 	title.add_theme_font_size_override("font_size", 48)
 	title.add_theme_color_override("font_color", Color("f4c542"))
-	add_child(title)
+	stage.add_child(title)
 
 	var sub := Label.new()
 	sub.text = "A bluffing game. Don't flip the duck."
 	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	sub.position = Vector2(0, 108)
-	sub.size = Vector2(1280, 28)
-	add_child(sub)
+	sub.size = Vector2(ScreenFit.BASE.x, 28)
+	stage.add_child(sub)
 
 	var form := VBoxContainer.new()
 	form.position = Vector2(60, 170)
 	form.size = Vector2(400, 420)
 	form.add_theme_constant_override("separation", 10)
-	add_child(form)
+	stage.add_child(form)
 
 	form.add_child(_labeled("Your name"))
 	_name_edit = LineEdit.new()
 	_name_edit.text = PlayerCosmetics.load_name()
 	_sent_name = PlayerCosmetics.clean_name(_name_edit.text)
 	_name_edit.max_length = PlayerCosmetics.MAX_NAME_LEN
-	_name_edit.custom_minimum_size = Vector2(0, 36)
+	_name_edit.custom_minimum_size = Vector2(0, TOUCH_PX)
 	_name_edit.text_submitted.connect(func(_t): _commit_name())
 	_name_edit.focus_exited.connect(_commit_name)
 	form.add_child(_name_edit)
 
 	var create := Button.new()
 	create.text = "Create room"
-	create.custom_minimum_size = Vector2(0, 42)
+	create.custom_minimum_size = Vector2(0, TOUCH_PX)
 	create.pressed.connect(_create_room)
 	form.add_child(create)
 
@@ -98,12 +101,12 @@ func _build() -> void:
 	form.add_child(join_row)
 	_code_edit = LineEdit.new()
 	_code_edit.placeholder_text = "Room code"
-	_code_edit.custom_minimum_size = Vector2(220, 40)
+	_code_edit.custom_minimum_size = Vector2(220, TOUCH_PX)
 	_code_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	join_row.add_child(_code_edit)
 	var join := Button.new()
 	join.text = "Join"
-	join.custom_minimum_size = Vector2(120, 40)
+	join.custom_minimum_size = Vector2(120, TOUCH_PX)
 	join.pressed.connect(_join_room)
 	join_row.add_child(join)
 
@@ -111,13 +114,13 @@ func _build() -> void:
 	_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	form.add_child(_status)
 
-	_build_cards_panel()
+	_build_cards_panel(stage)
 
 	_lobby_panel = Panel.new()
 	_lobby_panel.position = Vector2(900, 170)
-	_lobby_panel.size = Vector2(340, 400)
+	_lobby_panel.size = Vector2(340, 470)
 	_lobby_panel.visible = false
-	add_child(_lobby_panel)
+	stage.add_child(_lobby_panel)
 	var lp := VBoxContainer.new()
 	lp.set_anchors_preset(PRESET_FULL_RECT)
 	lp.offset_left = 16
@@ -141,7 +144,7 @@ func _build() -> void:
 	code_row.add_child(_code_field)
 	var copy := Button.new()
 	copy.text = "Copy"
-	copy.custom_minimum_size = Vector2(72, 44)
+	copy.custom_minimum_size = Vector2(72, TOUCH_PX)
 	copy.pressed.connect(_copy_code)
 	code_row.add_child(copy)
 	_code_hint = Label.new()
@@ -154,10 +157,12 @@ func _build() -> void:
 	lp.add_child(_player_list)
 	_start_btn = Button.new()
 	_start_btn.text = "Start game"
+	_start_btn.custom_minimum_size = Vector2(0, TOUCH_PX)
 	_start_btn.pressed.connect(func(): Net.start_match())
 	lp.add_child(_start_btn)
 	var leave := Button.new()
 	leave.text = "Leave room"
+	leave.custom_minimum_size = Vector2(0, TOUCH_PX)
 	leave.pressed.connect(func(): Net.leave_room(); _show_lobby(false))
 	lp.add_child(leave)
 
@@ -169,11 +174,11 @@ func _build() -> void:
 	_editor.finished.connect(_on_duck_finished)
 
 
-func _build_cards_panel() -> void:
+func _build_cards_panel(stage: Control) -> void:
 	var panel := Panel.new()
 	panel.position = Vector2(500, 170)
 	panel.size = Vector2(360, 300)
-	add_child(panel)
+	stage.add_child(panel)
 	var box := VBoxContainer.new()
 	box.set_anchors_preset(PRESET_FULL_RECT)
 	box.offset_left = 20
@@ -198,7 +203,7 @@ func _build_cards_panel() -> void:
 		var b := Button.new()
 		b.text = spec[0]
 		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		b.custom_minimum_size = Vector2(0, 38)
+		b.custom_minimum_size = Vector2(0, TOUCH_PX)
 		b.pressed.connect(spec[1])
 		buttons.add_child(b)
 
@@ -342,6 +347,21 @@ func _thumb(tex: Texture2D, size_px: Vector2) -> TextureRect:
 	t.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	t.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	return t
+
+
+## Android back button: close a pop-up, then leave the room, then quit.
+func _notification(what: int) -> void:
+	if what != NOTIFICATION_WM_GO_BACK_REQUEST:
+		return
+	if _editor != null and _editor.visible:
+		_editor.visible = false
+	elif _picker != null and _picker.visible:
+		_picker.close()
+	elif _lobby_panel != null and _lobby_panel.visible:
+		Net.leave_room()
+		_show_lobby(false)
+	else:
+		get_tree().quit()
 
 
 func _on_match_started() -> void:

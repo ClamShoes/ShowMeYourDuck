@@ -9,6 +9,7 @@ signal reveal_sequence_finished(mat)
 signal duck_presented(mat, card)
 
 const CardScene = preload("res://scenes/card.tscn")
+const ScreenFit = preload("res://scripts/ui/screen_fit.gd")
 
 const MAT_SIZE := Vector2(210, 168)
 const TOKEN_SCALE := 0.75
@@ -81,13 +82,18 @@ func reveal_slot_local(i: int) -> Vector2:
 
 
 ## Table seats for n players, viewer first: [{pos, dir}] where dir faces the table centre.
-static func seat_layout(n: int) -> Array:
-	var bottom := {pos = Vector2(535, 330), dir = Vector2.UP}
-	var top := {pos = Vector2(535, 90), dir = Vector2.DOWN}
-	var left := {pos = Vector2(40, 210), dir = Vector2.RIGHT}
-	var right := {pos = Vector2(1030, 210), dir = Vector2.LEFT}
-	var top_left := {pos = Vector2(180, 90), dir = Vector2.DOWN}
-	var top_right := {pos = Vector2(890, 90), dir = Vector2.DOWN}
+## Positions are designed for 1280x720; extra width spreads the side seats toward the edges of
+## `area` (the screen's safe rect) and everything else stays centred.
+static func seat_layout(n: int, area := Rect2(Vector2.ZERO, ScreenFit.BASE)) -> Array:
+	var extra := area.size - ScreenFit.BASE
+	var at := func(base: Vector2, kx: float) -> Vector2:
+		return (area.position + base + extra * Vector2(kx, 0.5)).round()
+	var bottom := {pos = at.call(Vector2(535, 330), 0.5), dir = Vector2.UP}
+	var top := {pos = at.call(Vector2(535, 90), 0.5), dir = Vector2.DOWN}
+	var left := {pos = at.call(Vector2(40, 210), 0.0), dir = Vector2.RIGHT}
+	var right := {pos = at.call(Vector2(1030, 210), 1.0), dir = Vector2.LEFT}
+	var top_left := {pos = at.call(Vector2(180, 90), 0.25), dir = Vector2.DOWN}
+	var top_right := {pos = at.call(Vector2(890, 90), 0.75), dir = Vector2.DOWN}
 	match n:
 		1:
 			return [bottom]

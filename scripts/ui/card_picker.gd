@@ -6,6 +6,7 @@ signal picked(kind: String, id: String)
 
 const CardCatalog = preload("res://scripts/ui/card_catalog.gd")
 const CardArt = preload("res://scripts/ui/card_art.gd")
+const ScreenFit = preload("res://scripts/ui/screen_fit.gd")
 
 const PANEL_SIZE := Vector2(980, 600)
 
@@ -15,7 +16,7 @@ var _kind := ""
 
 
 func _ready() -> void:
-	set_anchors_preset(PRESET_FULL_RECT)
+	set_anchors_and_offsets_preset(PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	visible = false
 	var dim := ColorRect.new()
@@ -25,10 +26,10 @@ func _ready() -> void:
 	add_child(dim)
 
 	var panel := PanelContainer.new()
-	panel.position = (Vector2(1280, 720) - PANEL_SIZE) * 0.5
+	panel.position = (ScreenFit.BASE - PANEL_SIZE) * 0.5
 	panel.size = PANEL_SIZE
 	panel.add_theme_stylebox_override("panel", overlay_style())
-	add_child(panel)
+	ScreenFit.centred_stage(self).add_child(panel)
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 10)
 	panel.add_child(box)
@@ -41,6 +42,7 @@ func _ready() -> void:
 	head.add_child(_title)
 	var close_btn := Button.new()
 	close_btn.text = "Close"
+	close_btn.custom_minimum_size = Vector2(100, 48)
 	close_btn.pressed.connect(close)
 	head.add_child(close_btn)
 

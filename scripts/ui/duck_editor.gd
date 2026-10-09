@@ -9,6 +9,7 @@ signal finished(image: Image)
 const CardArt = preload("res://scripts/ui/card_art.gd")
 const DuckDrawing = preload("res://scripts/ui/duck_drawing.gd")
 const CardPickerScript = preload("res://scripts/ui/card_picker.gd")
+const ScreenFit = preload("res://scripts/ui/screen_fit.gd")
 
 const ZOOM := 3
 const BRUSH_SIZES := [2, 4, 8, 14]
@@ -47,7 +48,7 @@ var _size_buttons: Dictionary = {}
 
 
 func _ready() -> void:
-	set_anchors_preset(PRESET_FULL_RECT)
+	set_anchors_and_offsets_preset(PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	visible = false
 	_img = DuckDrawing.blank_image()
@@ -196,7 +197,7 @@ func _build() -> void:
 	panel.position = Vector2(40, 24)
 	panel.size = Vector2(1200, 672)
 	panel.add_theme_stylebox_override("panel", CardPickerScript.overlay_style())
-	add_child(panel)
+	ScreenFit.centred_stage(self).add_child(panel)
 
 	var title := Label.new()
 	title.text = "Draw your duck"
@@ -216,7 +217,7 @@ func _build() -> void:
 		b.text = spec[1]
 		b.toggle_mode = true
 		b.button_group = tool_group
-		b.custom_minimum_size = Vector2(170, 34)
+		b.custom_minimum_size = Vector2(170, 48)
 		b.pressed.connect(set_tool.bind(spec[0]))
 		tools.add_child(b)
 		_tool_buttons[spec[0]] = b
@@ -229,7 +230,7 @@ func _build() -> void:
 		b.text = str(s)
 		b.toggle_mode = true
 		b.button_group = size_group
-		b.custom_minimum_size = Vector2(38, 32)
+		b.custom_minimum_size = Vector2(38, 48)
 		b.pressed.connect(set_brush_size.bind(s))
 		sizes.add_child(b)
 		_size_buttons[s] = b
@@ -237,7 +238,7 @@ func _build() -> void:
 	for spec in [["Undo  (Ctrl+Z)", undo], ["Redo  (Ctrl+Y)", redo], ["Clear", clear_canvas], ["Start from default duck", load_default]]:
 		var b := Button.new()
 		b.text = spec[0]
-		b.custom_minimum_size = Vector2(170, 32)
+		b.custom_minimum_size = Vector2(170, 48)
 		b.pressed.connect(spec[1])
 		tools.add_child(b)
 
@@ -310,14 +311,14 @@ func _build() -> void:
 
 	var cancel := Button.new()
 	cancel.text = "Cancel"
-	cancel.position = Vector2(900, 616)
-	cancel.size = Vector2(130, 40)
+	cancel.position = Vector2(900, 608)
+	cancel.size = Vector2(130, 48)
 	cancel.pressed.connect(func(): visible = false)
 	panel.add_child(cancel)
 	var done := Button.new()
 	done.text = "Done"
-	done.position = Vector2(1044, 616)
-	done.size = Vector2(130, 40)
+	done.position = Vector2(1044, 608)
+	done.size = Vector2(130, 48)
 	done.pressed.connect(_on_done)
 	panel.add_child(done)
 
