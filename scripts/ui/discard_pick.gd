@@ -15,6 +15,7 @@ const ENTER_STAGGER := 0.06
 ## Rebuild key (challenger|chooser|slots) so the table only rebuilds when the pick changes.
 var key := ""
 var _cards: Array = []
+var _hover_slot := -1
 
 
 func _ready() -> void:
@@ -58,9 +59,17 @@ func card_at(slot: int):
 
 ## Mirror the chooser's hover on this screen.
 func set_remote_hover(slot: int) -> void:
+	_hover_slot = slot
 	for i in _cards.size():
 		if _cards[i] != null:
 			_cards[i].set_remote_hover(i == slot)
+
+
+## Chooser's pointer (global, this screen): the hovered card leans toward it.
+func set_remote_point(p: Vector2) -> void:
+	var card = card_at(_hover_slot)
+	if card != null:
+		card.set_remote_point(p)
 
 
 ## Detach a slot's card (for the destroy FX) so freeing the row doesn't take it with it.

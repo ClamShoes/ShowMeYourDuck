@@ -12,6 +12,7 @@ const PlayerCosmetics = preload("res://scripts/ui/player_cosmetics.gd")
 const DiscardFxScript = preload("res://scripts/ui/discard_fx.gd")
 const StatusTextScript = preload("res://scripts/ui/status_text.gd")
 const DuckStamps = preload("res://scripts/ui/duck_stamps.gd")
+const SeatSpace = preload("res://scripts/ui/seat_space.gd")
 
 var _failed := 0
 var _passed := 0
@@ -69,6 +70,11 @@ func _init() -> void:
 	_run("card_art_new_drawing_same_rev_replaces_cache", test_card_art_new_drawing_same_rev_replaces_cache)
 	_run("profile_name_round_trips", test_profile_name_round_trips)
 	_run("status_text_is_per_viewer", test_status_text_is_per_viewer)
+	_run("seat_space_round_trips_between_viewers", test_seat_space_round_trips_between_viewers)
+	_run("reparent_keep_pose_keeps_seat_angle_and_scale", test_reparent_keep_pose_keeps_seat_angle_and_scale)
+	_run("cursor_mapping_is_continuous", test_cursor_mapping_is_continuous)
+	_run("server_hand_fx_relay_validates", test_server_hand_fx_relay_validates)
+	_run("server_cursor_relay_validates", test_server_cursor_relay_validates)
 	print("\n%d passed, %d failed" % [_passed, _failed])
 	quit(1 if _failed > 0 else 0)
 
@@ -728,6 +734,47 @@ func test_server_discard_hover_relay_requires_chooser() -> String:
 	return ""
 
 
+func test_server_hand_fx_relay_validates() -> String:
+	var srv = DuckServerScript.new()
+	var created: Dictionary = srv.create_room(2, "A")
+	srv.join_room(3, created.code, "B")
+	if srv.validate_hand_fx_relay(2, {"t": "hover", "slot": 0}).ok:
+		return "no relay before the match starts"
+	srv.start_match(2)
+	var hand_size: int = srv.rooms[created.code].state.players["p2"].hand.size()
+	var ok: Dictionary = srv.validate_hand_fx_relay(2, {"t": "drag", "slot": 1, "card_id": "p2_duck", "x": 5})
+	if not ok.ok or ok.peer_ids != [3] or ok.player_id != "p2":
+		return "seated player should relay to the other peer: %s" % ok
+	if ok.ev != {"t": "drag", "slot": 1}:
+		return "relayed event must keep only t and slot: %s" % ok.ev
+	for bad in [{"t": "peek", "slot": 0}, {"t": "hover", "slot": hand_size + 1}, {"t": "hover", "slot": -2},
+			{"t": "hover", "slot": "0"}, {"slot": 0}]:
+		if srv.validate_hand_fx_relay(2, bad).ok:
+			return "should reject %s" % bad
+	if not srv.validate_hand_fx_relay(2, {"t": "hover", "slot": -1}).ok:
+		return "clearing the hover (-1) should relay"
+	return ""
+
+
+func test_server_cursor_relay_validates() -> String:
+	var srv = DuckServerScript.new()
+	var created: Dictionary = srv.create_room(2, "A")
+	srv.join_room(3, created.code, "B")
+	srv.start_match(2)
+	var ok: Dictionary = srv.validate_cursor_relay(3, "mat:p2", Vector2(1e9, -1e9))
+	if not ok.ok or ok.peer_ids != [2] or ok.player_id != "p3":
+		return "cursor should relay to the other peer: %s" % ok
+	if ok.local != Vector2(4096, -4096):
+		return "cursor local should be clamped: %s" % ok.local
+	for anchor in ["hand:p3", "centre"]:
+		if not srv.validate_cursor_relay(3, anchor, Vector2.ZERO).ok:
+			return "%s should be a valid anchor" % anchor
+	for anchor in ["hand:p9", "deck:p2", "mat", "mat:p2:x", ""]:
+		if srv.validate_cursor_relay(3, anchor, Vector2.ZERO).ok:
+			return "%s should be rejected" % anchor
+	return ""
+
+
 func test_other_duck_owner_picks_discard() -> String:
 	var gs := _game(3, 7)
 	var err := _place_all_initial_safe(gs)
@@ -1260,33 +1307,41 @@ func test_stack_fan_is_even_and_fits_mat() -> String:
 	return ""
 
 
-func _reveal_rect(mat_pos: Vector2, dir: Vector2, i: int) -> Rect2:
+## Drawn rect of the i-th reveal in mat coords (same for every seat: the mat itself is rotated).
+func _reveal_rect(i: int) -> Rect2:
 	var shrink := CardView.SIZE * 0.5 * (1.0 - PlayerMatScript.REVEAL_SCALE)
-	return Rect2(mat_pos + PlayerMatScript.reveal_slot_for(dir, i) + shrink, CardView.SIZE * PlayerMatScript.REVEAL_SCALE)
+	return Rect2(PlayerMatScript.reveal_slot_local(i) + shrink, CardView.SIZE * PlayerMatScript.REVEAL_SCALE)
 
 
-func _token_rect(mat_pos: Vector2, i: int) -> Rect2:
+func _token_rect(i: int) -> Rect2:
 	var shrink := CardView.SIZE * 0.5 * (1.0 - PlayerMatScript.TOKEN_SCALE)
-	return Rect2(mat_pos + PlayerMatScript.slot_local(i) + shrink, CardView.SIZE * PlayerMatScript.TOKEN_SCALE)
+	return Rect2(PlayerMatScript.slot_local(i) + shrink, CardView.SIZE * PlayerMatScript.TOKEN_SCALE)
+
+
+func _seat_xform(s: Dictionary, is_viewer: bool) -> Transform2D:
+	return SeatSpace.mat_xform(s.pos, SeatSpace.seat_rotation(s.pos, s.dir, is_viewer))
 
 
 func test_reveal_rows_fit_screen_and_clear_stack() -> String:
 	var max_cards := GameTypes.SAFE_PER_PLAYER + 1
 	var screen := Rect2(0, 0, 1280, 720)
+	# k flipped off a full stack leaves max_cards - k tokens; the new top must stay clear.
+	for k in range(1, max_cards):
+		var top := _token_rect(max_cards - k - 1)
+		for i in k:
+			var hit := _reveal_rect(i).intersection(top)
+			if hit.get_area() > top.get_area() * 0.02:
+				return "reveal %d covers top token with %d left" % [i, max_cards - k]
 	for n in range(2, 7):
 		var seats: Array = PlayerMatScript.seat_layout(n)
-		for s in seats:
+		var xfs: Array = []
+		for si in seats.size():
+			xfs.append(_seat_xform(seats[si], si == 0))
+		for si in seats.size():
 			for i in max_cards:
-				var r := _reveal_rect(s.pos, s.dir, i)
+				var r: Rect2 = xfs[si] * _reveal_rect(i)
 				if not screen.encloses(r):
-					return "%dp seat %s dir %s: reveal %d %s leaves the screen" % [n, s.pos, s.dir, i, r]
-			# k flipped off a full stack leaves max_cards - k tokens; the new top must stay clear.
-			for k in range(1, max_cards):
-				var top := _token_rect(s.pos, max_cards - k - 1)
-				for i in k:
-					var hit := _reveal_rect(s.pos, s.dir, i).intersection(top)
-					if hit.get_area() > top.get_area() * 0.02:
-						return "%dp seat %s: reveal %d covers top token with %d left" % [n, s.pos, i, max_cards - k]
+					return "%dp seat %s: reveal %d %s leaves the screen" % [n, seats[si].pos, i, r]
 		if n > 4:
 			continue
 		# Rows of different mats must not collide (2-4 players).
@@ -1294,8 +1349,8 @@ func test_reveal_rows_fit_screen_and_clear_stack() -> String:
 			for b in range(a + 1, seats.size()):
 				for i in max_cards:
 					for j in max_cards:
-						var ra := _reveal_rect(seats[a].pos, seats[a].dir, i)
-						var rb := _reveal_rect(seats[b].pos, seats[b].dir, j)
+						var ra: Rect2 = xfs[a] * _reveal_rect(i)
+						var rb: Rect2 = xfs[b] * _reveal_rect(j)
 						if ra.intersects(rb):
 							return "%dp: reveal rows of seats %s and %s overlap" % [n, seats[a].pos, seats[b].pos]
 	return ""
@@ -1459,4 +1514,105 @@ func test_status_text_is_per_viewer() -> String:
 	snap.you_are_host = false
 	if StatusTextScript.for_viewer(snap, "p1") != "Game over — waiting for P0 to return to the lobby.":
 		return "non-host should wait for the host to return: %s" % StatusTextScript.for_viewer(snap, "p1")
+	return ""
+
+
+func test_reparent_keep_pose_keeps_seat_angle_and_scale() -> String:
+	var seat := Control.new()
+	seat.position = Vector2(300, 80)
+	seat.rotation = 2.4
+	seat.scale = Vector2(0.6, 0.6)
+	var layer := Control.new()
+	layer.position = Vector2(5, 7)
+	var card := Control.new()
+	card.size = CardView.SIZE
+	card.pivot_offset = CardView.SIZE * 0.5
+	card.position = Vector2(40, 10)
+	card.rotation = 0.2
+	seat.add_child(card)
+	var before := card.get_global_transform()
+	SeatSpace.reparent_keep_pose(card, layer)
+	var after := card.get_global_transform()
+	var err := ""
+	if card.get_parent() != layer:
+		err = "card should move to the new parent"
+	elif not (before.origin.is_equal_approx(after.origin) and before.x.is_equal_approx(after.x) and before.y.is_equal_approx(after.y)):
+		err = "on-screen pose changed: %s -> %s" % [before, after]
+	seat.free()
+	layer.free()
+	return err
+
+
+func test_seat_space_round_trips_between_viewers() -> String:
+	var vp := Vector2(1280, 720)
+	var card_w := CardView.SIZE.x
+	for n in range(2, 7):
+		var ids: Array = []
+		for i in n:
+			ids.append("p%d" % i)
+		var on_a := SeatSpace.anchors(SeatSpace.seat_list(ids, "p0"), "p0", vp)
+		var on_b := SeatSpace.anchors(SeatSpace.seat_list(ids, "p1"), "p1", vp)
+		for pid in ids:
+			var mat_name := "mat:%s" % pid
+			var mid := PlayerMatScript.MAT_SIZE * 0.5
+			var got := _cursor_a_to_b(SeatSpace.decode(mat_name, mid, on_a), on_a, on_b)
+			if got.distance_to(SeatSpace.decode(mat_name, mid, on_b)) > 0.01:
+				return "%dp: %s's mat centre should map mat to mat, got %s" % [n, pid, got]
+			# Slot centres of a 4-card hand laid out like the HBoxContainer (separation 4).
+			var hand_name := "hand:%s" % pid
+			var x0 := (SeatSpace.HAND_SIZE.x - (4 * card_w + 3 * 4.0)) * 0.5
+			for slot in 4:
+				var local := Vector2(x0 + card_w * 0.5 + slot * (card_w + 4.0), SeatSpace.HAND_SIZE.y * 0.5)
+				got = _cursor_a_to_b(SeatSpace.decode(hand_name, local, on_a), on_a, on_b)
+				if got.distance_to(SeatSpace.decode(hand_name, local, on_b)) > 0.01:
+					return "%dp: %s's hand slot %d should stay that slot, got %s" % [n, pid, slot, got]
+	return ""
+
+
+## The wire path: A encodes with its anchors; B rebuilds A's point with A's anchors and maps it.
+func _cursor_a_to_b(p: Vector2, on_a: Array, on_b: Array) -> Vector2:
+	var enc := SeatSpace.encode(p, on_a, false)
+	return SeatSpace.map_point(SeatSpace.decode(enc[0], enc[1], on_a), on_a, on_b, false)
+
+
+## Gaps between seats can map to long slides on another screen (steep but smooth), so a big 2px
+## step is bisected toward its biggest jump: a real snap stays big however finely it is sampled.
+func test_cursor_mapping_is_continuous() -> String:
+	var vp := Vector2(1280, 720)
+	var step := 2.0
+	var max_jump := 15.0
+	for n in [3, 4, 6]:
+		var ids: Array = []
+		for i in n:
+			ids.append("p%d" % i)
+		for pair in [["p0", "p1"], ["p1", "p0"], ["p0", ids[n - 1]]]:
+			var on_a := SeatSpace.anchors(SeatSpace.seat_list(ids, pair[0]), pair[0], vp)
+			var on_b := SeatSpace.anchors(SeatSpace.seat_list(ids, pair[1]), pair[1], vp)
+			var lines: Array = []
+			for y in range(0, int(vp.y) + 1, 60):
+				lines.append([Vector2(0, y), Vector2(step, 0), int(vp.x / step)])
+			for x in range(0, int(vp.x) + 1, 60):
+				lines.append([Vector2(x, 0), Vector2(0, step), int(vp.y / step)])
+			for line in lines:
+				var prev := _cursor_a_to_b(line[0], on_a, on_b)
+				for k in range(1, int(line[2]) + 1):
+					var p: Vector2 = line[0] + line[1] * k
+					var q := _cursor_a_to_b(p, on_a, on_b)
+					if q.distance_to(prev) > max_jump:
+						var lo: Vector2 = p - line[1]
+						var hi := p
+						var q_lo := prev
+						var q_hi := q
+						for _i in 8:
+							var mid := (lo + hi) * 0.5
+							var q_mid := _cursor_a_to_b(mid, on_a, on_b)
+							if q_mid.distance_to(q_lo) > q_mid.distance_to(q_hi):
+								hi = mid
+								q_hi = q_mid
+							else:
+								lo = mid
+								q_lo = q_mid
+						if q_lo.distance_to(q_hi) > 1.0:
+							return "%dp %s->%s: cursor snaps %.1fpx at %s" % [n, pair[0], pair[1], q_lo.distance_to(q_hi), lo]
+					prev = q
 	return ""

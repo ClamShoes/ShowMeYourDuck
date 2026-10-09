@@ -12,6 +12,9 @@ const StampPickerScript = preload("res://scripts/ui/stamp_picker.gd")
 const DuckDrawing = preload("res://scripts/ui/duck_drawing.gd")
 const DuckStamps = preload("res://scripts/ui/duck_stamps.gd")
 const PlayerCosmetics = preload("res://scripts/ui/player_cosmetics.gd")
+const SeatSpace = preload("res://scripts/ui/seat_space.gd")
+const OpponentHandScript = preload("res://scripts/ui/opponent_hand.gd")
+const RemoteCursorsScript = preload("res://scripts/ui/remote_cursors.gd")
 
 const SEAT_COLORS := [
 	Color("e07a3d"),
@@ -67,6 +70,27 @@ var _dragging_card = null
 ## Card mid local place flight/flip — must not be freed by hand layout.
 var _placing_card = null
 var _last_reorder_idx := -1
+## Opponents' face-down hands (pid -> OpponentHand), drawn under the mats.
+var _opp_root: Control
+var _opp_hands: Dictionary = {}
+## SeatSpace anchors for this screen; rebuilt with the mats.
+var _anchors: Array = []
+## Player ids in snapshot order (seat_list input) and pid -> that player's own-screen anchors.
+var _seat_ids: Array = []
+var _sender_anchors: Dictionary = {}
+var _cursors = null
+var _cursor_send_msec := 0
+var _cursor_last := Vector2.INF
+## Own hand card whose hover was last relayed.
+var _hover_view = null
+## pid -> latest decoded pointer (global, this screen)
+var _remote_points: Dictionary = {}
+## pid -> stack slot a remote place is flying into; that token stays hidden until it lands.
+var _awaiting_tokens: Dictionary = {}
+## pid -> that seat's rotation on this screen (SeatSpace.seat_rotation)
+var _seat_rot: Dictionary = {}
+
+const CURSOR_SEND_MS := 50
 
 const REVEAL_SEND_MS := 80
 const REVEAL_SEND_MIN_DT := 0.05
@@ -94,6 +118,8 @@ func _ready() -> void:
 		Net.reveal_cancel.connect(_on_remote_reveal_cancel)
 	if not Net.discard_hover.is_connected(_on_remote_discard_hover):
 		Net.discard_hover.connect(_on_remote_discard_hover)
+	Net.hand_fx.connect(_on_remote_hand_fx)
+	Net.cursor_moved.connect(_on_remote_cursor)
 	# Mid-match the server only sends a lobby update when the room has gone back to its lobby.
 	Net.lobby_updated.connect(_on_back_to_lobby)
 	_queue_render()
@@ -115,6 +141,12 @@ func _build_chrome() -> void:
 	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(bg)
 
+	# Under everything else: top-seat hands peek in behind the status text and Leave button.
+	_opp_root = Control.new()
+	_opp_root.set_anchors_preset(PRESET_FULL_RECT)
+	_opp_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_opp_root)
+
 	_status = Label.new()
 	_status.position = Vector2(24, 12)
 	_status.size = Vector2(900, 36)
@@ -133,6 +165,9 @@ func _build_chrome() -> void:
 	_banner.size = Vector2(1230, 28)
 	_banner.add_theme_color_override("font_color", Color("f4d35e"))
 	add_child(_banner)
+	# A hovered opponent card raises itself to HOVER_Z; keep the top chrome readable over it.
+	for top_chrome in [_status, back, _banner]:
+		top_chrome.z_index = CardView.HOVER_Z + 1
 
 	_mats_root = Control.new()
 	_mats_root.set_anchors_preset(PRESET_FULL_RECT)
@@ -140,8 +175,8 @@ func _build_chrome() -> void:
 	add_child(_mats_root)
 
 	_hand_box = HBoxContainer.new()
-	_hand_box.position = Vector2(280, 560)
-	_hand_box.size = Vector2(720, 150)
+	_hand_box.position = SeatSpace.HAND_POS
+	_hand_box.size = SeatSpace.HAND_SIZE
 	_hand_box.alignment = BoxContainer.ALIGNMENT_CENTER
 	add_child(_hand_box)
 
@@ -170,6 +205,12 @@ func _build_chrome() -> void:
 	_drag_layer.set_anchors_preset(PRESET_FULL_RECT)
 	_drag_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_drag_canvas.add_child(_drag_layer)
+
+	var cursor_canvas := CanvasLayer.new()
+	cursor_canvas.layer = 150
+	add_child(cursor_canvas)
+	_cursors = RemoteCursorsScript.new()
+	cursor_canvas.add_child(_cursors)
 
 	_bid_row = HBoxContainer.new()
 	_bid_row.position = Vector2(430, 508)
@@ -284,6 +325,7 @@ func _render() -> void:
 	_sync_pick_row(snap, viewer)
 	_update_scoreboard(snap)
 	_hide_local_placing_stack_token()
+	_hide_awaiting_tokens()
 	var flight_nodes := _take_parked_if_new_hand(snap)
 	_mark_flight_pending(flight_nodes, viewer)
 	_layout_hand(snap)
@@ -389,6 +431,11 @@ func _apply_new_discard(snap: Dictionary, viewer: String) -> void:
 			view.interactable = false
 			view.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			job.view = view
+	elif slot < 0 and _opp_hands.has(job.player_id):
+		var back = _opp_hands[job.player_id].take_for_discard(_drag_layer)
+		if back:
+			back.set_meta("discard_fx", true)
+			job.view = back
 	if _reveals_in_flight() > 0:
 		_discard_queue.append(job)
 	else:
@@ -407,22 +454,25 @@ func _start_discard(job: Dictionary) -> void:
 	var view = job.view
 	var tex: Texture2D
 	var center: Vector2
+	var rot := 0.0
 	var sc := PlayerMatScript.TOKEN_SCALE
 	if view != null and is_instance_valid(view):
 		var owner_id := String(view.owner_id) if String(view.owner_id) != "" else String(job.player_id)
 		tex = CardArt.face_texture(owner_id, bool(job.is_duck)) if job.card_id != "" else CardArt.back_texture(owner_id)
 		var xf: Transform2D = view.get_global_transform()
 		center = xf * (CardView.SIZE * 0.5)
+		rot = xf.get_rotation()
 		sc = xf.get_scale().x
 		view.visible = false
 	else:
 		view = null
 		tex = CardArt.face_texture(job.player_id, bool(job.is_duck)) if job.card_id != "" else CardArt.back_texture(job.player_id)
 		var mat = _mats.get(job.player_id)
-		center = mat.global_position + PlayerMatScript.MAT_SIZE * 0.5 if mat else get_viewport_rect().size * 0.5
+		center = mat.get_global_transform() * (PlayerMatScript.MAT_SIZE * 0.5) if mat else get_viewport_rect().size * 0.5
+		rot = mat.rotation if mat else 0.0
 	var fx = DiscardFxScript.play(
 		_drag_layer, tex, center, sc, job.style, hash("%s|%d" % [job.player_id, job.seq]),
-		get_viewport_rect().size * 0.5, DISCARD_PRESENT_SCALE
+		get_viewport_rect().size * 0.5, DISCARD_PRESENT_SCALE, rot
 	)
 	fx.finished.connect(_on_discard_finished.bind(view))
 
@@ -504,17 +554,18 @@ func _shake_table() -> void:
 	if _shake_tween and _shake_tween.is_valid():
 		_shake_tween.kill()
 		_apply_table_shake(0.0)
-	_shake_base = [_mats_root.position, _hand_box.position]
+	_shake_base = [_mats_root.position, _hand_box.position, _opp_root.position]
 	_shake_tween = create_tween()
 	_shake_tween.tween_method(_apply_table_shake, 1.0, 0.0, TABLE_SHAKE_SEC)
 
 
 func _apply_table_shake(k: float) -> void:
-	if _shake_base.size() < 2:
+	if _shake_base.size() < 3:
 		return
 	var off := Vector2(randf_range(-1.0, 1.0), randf_range(-1.0, 1.0)) * TABLE_SHAKE_PX * k
 	_mats_root.position = _shake_base[0] + off
 	_hand_box.position = _shake_base[1] + off
+	_opp_root.position = _shake_base[2] + off
 
 
 ## One-shot burst of tiny copies of the owner's duck drawing, above everything.
@@ -571,12 +622,14 @@ func _player_name(snap: Dictionary, pid: String) -> String:
 
 
 func _layout_mats(snap: Dictionary, viewer: String) -> void:
-	var ids: Array = []
+	_seat_ids.clear()
 	for p in snap.players:
-		ids.append(String(p.id))
-	if viewer in ids:
-		while String(ids[0]) != viewer:
-			ids.append(ids.pop_front())
+		_seat_ids.append(String(p.id))
+	_sender_anchors.clear()
+	var seat_list := SeatSpace.seat_list(_seat_ids, viewer)
+	var ids: Array = []
+	for s in seat_list:
+		ids.append(s.pid)
 	var wanted: Dictionary = {}
 	for pid in ids:
 		wanted[pid] = true
@@ -587,7 +640,6 @@ func _layout_mats(snap: Dictionary, viewer: String) -> void:
 			if is_instance_valid(old):
 				old.queue_free()
 	var n := ids.size()
-	var seats := PlayerMatScript.seat_layout(n)
 	var phase := int(snap.phase)
 	var challenger := String(snap.get("challenger_id", ""))
 	var own_stack_left := 0
@@ -610,8 +662,9 @@ func _layout_mats(snap: Dictionary, viewer: String) -> void:
 			mat.reveal_sequence_finished.connect(_on_reveal_sequence_finished)
 			mat.duck_presented.connect(_on_duck_presented)
 			_mats[pid] = mat
-		mat.position = seats[i].pos
-		mat.reveal_dir = seats[i].dir
+		mat.position = seat_list[i].pos
+		mat.rotation = SeatSpace.seat_rotation(seat_list[i].pos, seat_list[i].dir, pid == viewer)
+		_seat_rot[pid] = mat.rotation
 		var top_revealable := false
 		if phase == GameTypes.Phase.REVEAL and challenger == viewer:
 			if own_stack_left > 0:
@@ -619,6 +672,30 @@ func _layout_mats(snap: Dictionary, viewer: String) -> void:
 			else:
 				top_revealable = pid != viewer and int(info.stack_count) > 0
 		mat.refresh(info, top_revealable)
+	_anchors = SeatSpace.anchors(seat_list, viewer, get_viewport_rect().size)
+	_layout_opponent_hands(snap, seat_list, viewer)
+	_cursors.keep_only(ids)
+
+
+func _layout_opponent_hands(snap: Dictionary, seat_list: Array, viewer: String) -> void:
+	var wanted: Dictionary = {}
+	for s in seat_list:
+		if String(s.pid) != viewer:
+			wanted[String(s.pid)] = s
+	for pid in _opp_hands.keys():
+		if not wanted.has(pid):
+			_opp_hands[pid].queue_free()
+			_opp_hands.erase(pid)
+	for pid in wanted:
+		var hand = _opp_hands.get(pid)
+		if hand == null:
+			hand = OpponentHandScript.new()
+			hand.setup(pid)
+			_opp_root.add_child(hand)
+			_opp_hands[pid] = hand
+		var s: Dictionary = wanted[pid]
+		hand.place(SeatSpace.hand_xform(s.pos, s.dir, false))
+		hand.sync_count(int(_player_info(snap, pid).get("hand_count", 0)))
 
 
 ## Duck-owner pick: show the challenger's shuffled cards at centre once the Duck reveal lands.
@@ -639,11 +716,16 @@ func _sync_pick_row(snap: Dictionary, viewer: String) -> void:
 		_pick_row.picked.connect(func(slot: int): _submit(GameProtocol.pick_discard(slot)))
 	# The challenger's cards are in the row; don't show them twice.
 	_hand_box.visible = not (_pick_row != null and String(snap.challenger_id) == viewer)
+	for pid in _opp_hands:
+		_opp_hands[pid].visible = not (_pick_row != null and String(snap.challenger_id) == pid)
 
 
 func _on_remote_discard_hover(slot: int) -> void:
 	if _pick_row != null:
 		_pick_row.set_remote_hover(slot)
+		var chooser := String(_snapshot().get("discard_chooser_id", ""))
+		if _remote_points.has(chooser):
+			_pick_row.set_remote_point(_remote_points[chooser])
 
 
 func _update_scoreboard(snap: Dictionary) -> void:
@@ -717,7 +799,7 @@ func _layout_hand(snap: Dictionary) -> void:
 				continue
 			if child == _dragging_card or child == _placing_card:
 				continue
-			if child.has_meta("local_place_fx") or child.has_meta("discard_fx"):
+			if child.has_meta("local_place_fx") or child.has_meta("discard_fx") or child.has_meta("remote_hand"):
 				continue
 			if child.has_meta("parked_reveal") or child.has_meta("linger_reveal") or child.has_meta("reveal_card_id"):
 				continue
@@ -755,6 +837,8 @@ func _layout_hand(snap: Dictionary) -> void:
 			view.dropped.connect(_on_card_dropped)
 			view.pressed.connect(_on_card_pressed)
 			view.drag_started.connect(_on_card_drag_started)
+			view.mouse_entered.connect(_on_hand_card_hover.bind(view, true))
+			view.mouse_exited.connect(_on_hand_card_hover.bind(view, false))
 			if _flight_pending.has(cid):
 				view.modulate.a = 0.0
 				view.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -794,9 +878,33 @@ func _force_idle_hand(except = null) -> void:
 			child.force_idle()
 
 
+## Relay which own hand card is hovered (slot only) so opponents see it lift and lean.
+func _on_hand_card_hover(view, on: bool) -> void:
+	if _dragging_card != null or not is_instance_valid(view) or view.get_parent() != _hand_box:
+		return
+	if on:
+		_hover_view = view
+		Net.send_hand_fx("hover", _hand_slot_of(view))
+	elif _hover_view == view:
+		_hover_view = null
+		Net.send_hand_fx("hover", -1)
+
+
+func _hand_slot_of(view) -> int:
+	var i := 0
+	for child in _hand_box.get_children():
+		if child == view:
+			return i
+		if child != _hand_spacer and not child.is_queued_for_deletion():
+			i += 1
+	return -1
+
+
 func _on_card_drag_started(card) -> void:
 	_dragging_card = card
+	_hover_view = null
 	_last_reorder_idx = card.get_hand_index()
+	Net.send_hand_fx("drag", _last_reorder_idx)
 	_force_idle_hand(card)
 	_ensure_hand_spacer(card.get_hand_index())
 
@@ -817,6 +925,7 @@ func _clear_hand_spacer() -> void:
 
 
 func _process(_delta: float) -> void:
+	_send_cursor()
 	if _dragging_card == null or not is_instance_valid(_dragging_card):
 		_dragging_card = null
 		return
@@ -824,6 +933,105 @@ func _process(_delta: float) -> void:
 		# Card ended drag this frame via its own _process; drop handler clears state.
 		return
 	_reorder_hand_while_dragging(_dragging_card)
+
+
+func _send_cursor() -> void:
+	var now := Time.get_ticks_msec()
+	if _anchors.is_empty() or now - _cursor_send_msec < CURSOR_SEND_MS:
+		return
+	var p := get_global_mouse_position()
+	if p == _cursor_last:
+		return
+	_cursor_last = p
+	_cursor_send_msec = now
+	var enc := SeatSpace.encode(p, _anchors, _pick_row != null)
+	Net.send_cursor(String(enc[0]), enc[1])
+
+
+func _on_remote_cursor(pid: String, anchor: String, local: Vector2) -> void:
+	if not pid in _seat_ids:
+		return
+	if not _sender_anchors.has(pid):
+		_sender_anchors[pid] = SeatSpace.anchors(SeatSpace.seat_list(_seat_ids, pid), pid, get_viewport_rect().size)
+	var from: Array = _sender_anchors[pid]
+	var sender_pt = SeatSpace.decode(anchor, local, from)
+	if sender_pt == null:
+		return
+	var p := SeatSpace.map_point(sender_pt, from, _anchors, _pick_row != null)
+	_remote_points[pid] = p
+	var mat = _mats.get(pid)
+	_cursors.set_cursor(pid, p, mat.seat_color if mat else Color.WHITE, float(_seat_rot.get(pid, 0.0)))
+	if _opp_hands.has(pid):
+		_opp_hands[pid].set_point(p)
+	if _pick_row != null and String(_snapshot().get("discard_chooser_id", "")) == pid:
+		_pick_row.set_remote_point(p)
+
+
+func _on_remote_hand_fx(pid: String, ev: Dictionary) -> void:
+	var hand = _opp_hands.get(pid)
+	if hand == null:
+		return
+	var slot := int(ev.get("slot", -1))
+	match String(ev.get("t", "")):
+		"hover":
+			hand.set_hover(slot)
+		"drag":
+			hand.begin_drag(slot, _drag_layer)
+		"gap":
+			hand.move_gap(slot)
+		"drop":
+			hand.drop_return(slot)
+		"place":
+			_fly_remote_place(pid, hand.take_held())
+	if _remote_points.has(pid):
+		hand.set_point(_remote_points[pid])
+
+
+## Opponent dropped a card on their mat: fly the back into their next stack slot. Their new
+## token is hidden until it lands (the snapshot may add it mid-flight).
+func _fly_remote_place(pid: String, card) -> void:
+	var mat = _mats.get(pid)
+	if card == null:
+		return
+	if mat == null:
+		card.queue_free()
+		return
+	var slot: int = mat.stack_size()
+	_awaiting_tokens[pid] = slot
+	_hide_awaiting_tokens()
+	card.z_index = 4096
+	var tw := create_tween().set_parallel(true)
+	# Drag layer sits at the origin and cards pivot on their centre, so `position` = centre - half.
+	tw.tween_property(card, "position", mat.stack_slot_centre_global(slot) - CardView.SIZE * 0.5, PLACE_FLIGHT_SEC).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	var token_scale := Vector2(PlayerMatScript.TOKEN_SCALE, PlayerMatScript.TOKEN_SCALE)
+	tw.tween_property(card, "scale", token_scale, PLACE_FLIGHT_SEC)
+	tw.tween_property(card, "rotation", _shortest_turn(card.rotation, mat.rotation), PLACE_FLIGHT_SEC)
+	tw.chain().tween_callback(_on_remote_place_landed.bind(pid, slot, card))
+
+
+## End angle for tweening `from` to `to` the short way round.
+func _shortest_turn(from: float, to: float) -> float:
+	return from + wrapf(to - from, -PI, PI)
+
+
+func _on_remote_place_landed(pid: String, slot: int, card) -> void:
+	if is_instance_valid(card):
+		card.queue_free()
+	if _awaiting_tokens.get(pid, -1) == slot:
+		_awaiting_tokens.erase(pid)
+	var mat = _mats.get(pid)
+	var token = mat.stack_token(slot) if mat else null
+	if token:
+		token.visible = true
+		token.juice()
+
+
+func _hide_awaiting_tokens() -> void:
+	for pid in _awaiting_tokens:
+		var mat = _mats.get(pid)
+		var token = mat.stack_token(_awaiting_tokens[pid]) if mat else null
+		if token:
+			token.visible = false
 
 
 func _reorder_hand_while_dragging(card) -> void:
@@ -851,6 +1059,7 @@ func _reorder_hand_while_dragging(card) -> void:
 	_hand_box.add_child(_hand_spacer)
 	_hand_box.move_child(_hand_spacer, clampi(target, 0, _hand_box.get_child_count() - 1))
 	_last_reorder_idx = target
+	Net.send_hand_fx("gap", target)
 	card.set_hand_index(_hand_spacer.get_index())
 	if displaced != null and displaced.has_method("play_quiver"):
 		displaced.play_quiver()
@@ -975,6 +1184,8 @@ func _on_card_dropped(card, at: Vector2) -> void:
 	var viewer := _viewer_id()
 	var mat = _mats.get(viewer)
 	if mat and mat.contains_point(at) and _can_play(snap, viewer):
+		# Before the intent: both are reliable, so opponents start the flight before the snapshot.
+		Net.send_hand_fx("place", -1)
 		_submit(GameProtocol.place_card(card.card_id))
 		# Keep alive across snapshot hand layout (drag_layer used to free this card).
 		_placing_card = card
@@ -987,6 +1198,7 @@ func _on_card_dropped(card, at: Vector2) -> void:
 		_play_local_place(card, mat)
 		_force_idle_hand()
 	else:
+		Net.send_hand_fx("drop", insert_at)
 		card.return_to_hand(insert_at)
 		_sync_local_order_from_hand()
 		_force_idle_hand()
@@ -999,8 +1211,8 @@ func _play_local_place(card, mat) -> void:
 	_local_placing_card_id = String(card.card_id)
 	_local_placing_slot = mat.stack_size() if mat and mat.has_method("stack_size") else -1
 	var target := Vector2.ZERO
-	if mat and mat.has_method("next_stack_slot_global"):
-		target = mat.next_stack_slot_global()
+	if mat and mat.has_method("stack_slot_centre_global"):
+		target = mat.stack_slot_centre_global() - CardView.SIZE * 0.5
 	else:
 		target = card.global_position
 	card.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -1201,18 +1413,14 @@ func _take_parked_if_new_hand(snap: Dictionary) -> Array:
 		for n in nodes:
 			if not is_instance_valid(n):
 				continue
-			# Reparent off the mat immediately so clear_parked won't free them.
-			var gp: Vector2 = n.global_position
-			var sc: Vector2 = n.scale
+			# Reparent off the mat immediately so clear_parked won't free them; keep the
+			# (possibly rotated) on-screen pose as the flight's start.
+			var dest_parent: Node = _drag_layer if _drag_layer else self
 			if n.get_parent():
-				n.get_parent().remove_child(n)
-			if _drag_layer:
-				_drag_layer.add_child(n)
+				SeatSpace.reparent_keep_pose(n, dest_parent)
 			else:
-				add_child(n)
+				dest_parent.add_child(n)
 			n.top_level = true
-			n.global_position = gp
-			n.scale = sc
 			n.z_index = 50
 			n.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			out.append(n)
@@ -1264,27 +1472,32 @@ func _start_return_flights(nodes: Array, viewer: String) -> void:
 		if cid == "" and node.get("card_id") != null:
 			cid = String(node.card_id)
 		var owner_id := _reveal_owner_of(node)
-		# Already on drag layer from take; keep current transform as start.
-		var start_gp: Vector2 = node.global_position
+		# Already on drag layer from take (origin, centre pivot): `position` = centre - half a card.
 		node.z_index = 50
 		node.mouse_filter = Control.MOUSE_FILTER_IGNORE
 
-		var dest := start_gp
+		var dest: Vector2 = node.position
+		var dest_rot := 0.0
 		var to_hand := owner_id == viewer and cid != ""
 		if to_hand:
 			var hand_view = _find_hand_card(cid)
 			if hand_view:
 				dest = hand_view.global_position
 			else:
-				dest = _hand_box.global_position + _hand_box.size * 0.5 - Vector2(48, 64)
+				dest = _hand_box.global_position + _hand_box.size * 0.5 - CardView.SIZE * 0.5
+		elif _opp_hands.has(owner_id):
+			dest = _opp_hands[owner_id].centre_global() - CardView.SIZE * 0.5
+			dest_rot = _opp_hands[owner_id].rotation
 		else:
 			var mat = _mats.get(owner_id)
 			if mat:
-				dest = mat.global_position + Vector2(mat.size.x * 0.5 - 36, mat.size.y * 0.55)
+				dest = mat.get_global_transform() * (PlayerMatScript.MAT_SIZE * 0.5) - CardView.SIZE * 0.5
+				dest_rot = mat.rotation
 
 		var tw := create_tween()
 		tw.set_parallel(true)
-		tw.tween_property(node, "global_position", dest, RETURN_FLIGHT_SEC).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
+		tw.tween_property(node, "position", dest, RETURN_FLIGHT_SEC).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
+		tw.tween_property(node, "rotation", _shortest_turn(node.rotation, dest_rot), RETURN_FLIGHT_SEC)
 		if to_hand:
 			tw.tween_property(node, "scale", Vector2.ONE, RETURN_FLIGHT_SEC)
 		else:

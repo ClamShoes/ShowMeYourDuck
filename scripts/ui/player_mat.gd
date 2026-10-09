@@ -15,16 +15,12 @@ const TOKEN_SCALE := 0.75
 ## Top-left of where card 0 appears (mat coords). Fan step keeps every card's left edge visible.
 const STACK_ORIGIN := Vector2(10, 56)
 const STACK_STEP := Vector2(18, 4)
-## Flipped cards rest smaller, in a row on the mat's table-centre side.
+## Flipped cards rest smaller, in a row on the mat's table-centre side (local top: the table rotates
+## each mat so local UP faces the centre). Right-anchored so it never covers the stack's top token,
+## which fans from the left.
 const REVEAL_SCALE := 0.6
-## UP/DOWN rows are right-anchored so they never cover the stack's top token (which fans from
-## the left); DOWN sits lower than UP reaches so facing mats' rows don't meet.
-const REVEAL_ROW_UP_Y := -10.0
-const REVEAL_ROW_DOWN_Y := 150.0
+const REVEAL_ROW_Y := -10.0
 const REVEAL_ROW_STEP := 30.0
-const REVEAL_COL_Y := 14.0
-const REVEAL_COL_STEP := 24.0
-const REVEAL_COL_OUTSET := 20.0
 const PARKED_Z := 20
 const PRESENT_Z := 60
 ## Reveal sequence: drift toward the table centre while the flip clip finishes, present toward the
@@ -36,15 +32,13 @@ const SAFE_PRESENT_SCALE := 1.15
 const SAFE_PRESENT_IN_SEC := 0.18
 const SAFE_HOLD_SEC := 0.22
 const DUCK_PRESENT_SCALE := 1.6
-const DUCK_PRESENT_IN_SEC := 0.24
+const DUCK_PRESENT_IN_SEC := 0.35
 const DUCK_HOLD_SEC := 0.9
 const DUCK_SHAKE_SEC := 0.7
 const DUCK_SHAKE_DEG := 10.0
 const SETTLE_SEC := 0.35
 
 var player_id: String = ""
-## Toward the table centre; set by the table per seat.
-var reveal_dir := Vector2.UP
 var seat_color: Color = Color.WHITE
 
 var _stack_box: Control
@@ -61,23 +55,11 @@ static func slot_local(i: int) -> Vector2:
 	return STACK_ORIGIN + STACK_STEP * i - CardView.SIZE * 0.5 * (1.0 - TOKEN_SCALE)
 
 
-## Card node position for the i-th flipped card of a mat whose centre side is `dir`.
-static func reveal_slot_for(dir: Vector2, i: int) -> Vector2:
+## Card node position for the i-th flipped card (mat coords).
+static func reveal_slot_local(i: int) -> Vector2:
 	var drawn := CardView.SIZE * REVEAL_SCALE
-	var top_left: Vector2
-	if dir == Vector2.DOWN:
-		top_left = Vector2(MAT_SIZE.x - 10.0 - drawn.x - REVEAL_ROW_STEP * i, REVEAL_ROW_DOWN_Y)
-	elif dir == Vector2.RIGHT:
-		top_left = Vector2(MAT_SIZE.x - REVEAL_COL_OUTSET, REVEAL_COL_Y + REVEAL_COL_STEP * i)
-	elif dir == Vector2.LEFT:
-		top_left = Vector2(STACK_ORIGIN.x - 2.0 - drawn.x, REVEAL_COL_Y + REVEAL_COL_STEP * i)
-	else:
-		top_left = Vector2(MAT_SIZE.x - 10.0 - drawn.x - REVEAL_ROW_STEP * i, REVEAL_ROW_UP_Y)
+	var top_left := Vector2(MAT_SIZE.x - 10.0 - drawn.x - REVEAL_ROW_STEP * i, REVEAL_ROW_Y)
 	return top_left - CardView.SIZE * 0.5 * (1.0 - REVEAL_SCALE)
-
-
-func reveal_slot_local(i: int) -> Vector2:
-	return reveal_slot_for(reveal_dir, i)
 
 
 ## Table seats for n players, viewer first: [{pos, dir}] where dir faces the table centre.
@@ -105,6 +87,7 @@ static func seat_layout(n: int) -> Array:
 
 func _ready() -> void:
 	custom_minimum_size = MAT_SIZE
+	pivot_offset = MAT_SIZE * 0.5
 	mouse_filter = Control.MOUSE_FILTER_STOP
 
 
@@ -220,11 +203,14 @@ func _run_reveal_sequence(card: Node, is_duck: bool, idx: int) -> void:
 	card.set_revealed_face(is_duck)
 
 
-## Where a flipped card drifts to while its flip finishes (node position, mat coords).
+## Where a flipped card drifts to while its flip finishes (node position, mat coords; local UP
+## faces the table centre).
 func present_point(card: Node) -> Vector2:
-	return card.position + reveal_dir * PRESENT_DRIFT
+	return card.position + Vector2.UP * PRESENT_DRIFT
 
 
+## Safe presents in place in the mat's own frame; a Duck turns upright for this screen and
+## presents at the screen centre before settling back into the reveal row.
 func _present(card: Node, is_duck: bool, idx: int, drift: Tween, present_pos: Vector2) -> void:
 	if not is_instance_valid(card) or not card.has_meta("revealing"):
 		return
@@ -235,9 +221,13 @@ func _present(card: Node, is_duck: bool, idx: int, drift: Tween, present_pos: Ve
 	card.set_meta("reveal_tween", tw)
 	tw.tween_property(card, "scale", Vector2.ONE * s, in_sec).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	tw.parallel().tween_property(card, "present_height", 1.0, in_sec).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	if is_duck:
+		present_pos = get_global_transform().affine_inverse() * (get_viewport_rect().size * 0.5) - CardView.SIZE * 0.5
+		tw.parallel().tween_property(card, "rotation", wrapf(-rotation, -PI, PI), in_sec).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 	# Clip ended before the drift did (flip was mostly scrubbed already): finish the move here.
-	if drift and drift.is_valid() and drift.is_running():
-		drift.kill()
+	if is_duck or (drift and drift.is_valid() and drift.is_running()):
+		if drift and drift.is_valid():
+			drift.kill()
 		tw.parallel().tween_property(card, "position", present_pos, in_sec).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 	if is_duck:
 		tw.tween_callback(func():
@@ -249,6 +239,8 @@ func _present(card: Node, is_duck: bool, idx: int, drift: Tween, present_pos: Ve
 	tw.tween_property(card, "position", reveal_slot_local(idx), SETTLE_SEC).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	tw.parallel().tween_property(card, "scale", Vector2.ONE * REVEAL_SCALE, SETTLE_SEC).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 	tw.parallel().tween_property(card, "present_height", 0.0, SETTLE_SEC).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+	if is_duck:
+		tw.parallel().tween_property(card, "rotation", 0.0, SETTLE_SEC).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 	tw.tween_callback(func():
 		card.juice()
 		_finish_sequence(card, true)
@@ -451,8 +443,9 @@ func contains_point(global_pt: Vector2) -> bool:
 	return get_global_rect().has_point(global_pt)
 
 
-## Global top-left for the next face-down stack token (after a place).
-func next_stack_slot_global() -> Vector2:
-	if _stack_box == null:
-		return global_position
-	return _stack_box.global_position + slot_local(_stack_count)
+## Global centre of stack slot `i` (default: the next one a place will fill). Mats may be rotated;
+## subtract CardView.SIZE / 2 for the node position of a centre-pivoted card on an unrotated parent.
+func stack_slot_centre_global(i: int = -1) -> Vector2:
+	if i < 0:
+		i = _stack_count
+	return get_global_transform() * (slot_local(i) + CardView.SIZE * 0.5)

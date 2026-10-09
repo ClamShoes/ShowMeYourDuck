@@ -10,6 +10,10 @@ signal reveal_cancel(target_player_id: String)
 ## Duck owner's hover over the centre pick row; -1 = none.
 signal discard_hover(slot: int)
 signal duck_art_updated(player_id: String)
+## Another player's own-hand gesture: ev = {t: hover|drag|gap|drop|place, slot}.
+signal hand_fx(player_id: String, ev: Dictionary)
+## Another player's pointer in seat space (see SeatSpace).
+signal cursor_moved(player_id: String, anchor: String, local: Vector2)
 
 const DuckServerScript = preload("res://scripts/net/server.gd")
 const DuckDrawing = preload("res://scripts/ui/duck_drawing.gd")
@@ -324,6 +328,18 @@ func send_discard_hover(slot: int) -> void:
 	rpc_id(1, "s_discard_hover", slot)
 
 
+func send_hand_fx(t: String, slot: int) -> void:
+	if not _is_client_connected():
+		return
+	rpc_id(1, "s_hand_fx", {"t": t, "slot": slot})
+
+
+func send_cursor(anchor: String, local: Vector2) -> void:
+	if not _is_client_connected():
+		return
+	rpc_id(1, "s_cursor", anchor, local)
+
+
 func leave_room() -> void:
 	if _is_client_connected():
 		rpc_id(1, "s_leave")
@@ -494,6 +510,28 @@ func s_discard_hover(slot: int) -> void:
 		rpc_id(int(pid), "c_discard_hover", slot)
 
 
+@rpc("any_peer", "reliable")
+func s_hand_fx(ev: Dictionary) -> void:
+	if not _is_server:
+		return
+	var result: Dictionary = _logic.validate_hand_fx_relay(multiplayer.get_remote_sender_id(), ev)
+	if not result.ok:
+		return
+	for pid in result.peer_ids:
+		rpc_id(int(pid), "c_hand_fx", result.player_id, result.ev)
+
+
+@rpc("any_peer", "unreliable_ordered")
+func s_cursor(anchor: String, local: Vector2) -> void:
+	if not _is_server:
+		return
+	var result: Dictionary = _logic.validate_cursor_relay(multiplayer.get_remote_sender_id(), anchor, local)
+	if not result.ok:
+		return
+	for pid in result.peer_ids:
+		rpc_id(int(pid), "c_cursor", result.player_id, anchor, result.local)
+
+
 @rpc("authority", "reliable")
 func c_lobby(code: String, players: Array, your_player_id: String, host: bool, room_min_players: int) -> void:
 	room_code = code
@@ -548,6 +586,16 @@ func c_reveal_cancel(target_player_id: String) -> void:
 @rpc("authority", "reliable")
 func c_discard_hover(slot: int) -> void:
 	discard_hover.emit(slot)
+
+
+@rpc("authority", "reliable")
+func c_hand_fx(fx_player_id: String, ev: Dictionary) -> void:
+	hand_fx.emit(fx_player_id, ev)
+
+
+@rpc("authority", "unreliable_ordered")
+func c_cursor(cursor_player_id: String, anchor: String, local: Vector2) -> void:
+	cursor_moved.emit(cursor_player_id, anchor, local)
 
 
 func _broadcast_lobby(code: String) -> void:
