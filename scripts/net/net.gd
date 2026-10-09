@@ -1,6 +1,6 @@
 extends Node
 
-signal lobby_updated(code: String, players: Array, is_host: bool)
+signal lobby_updated(code: String, players: Array, is_host: bool, min_players: int)
 signal match_updated(snapshot: Dictionary)
 signal match_started
 signal connection_failed(msg: String)
@@ -36,15 +36,25 @@ var _retrying := false
 var _spawn_attempted := false
 
 
+func _ready() -> void:
+	# Web build talks to the server behind the site it was loaded from (Caddy proxies /ws).
+	if OS.has_feature("web"):
+		server_url = "wss://%s/ws" % str(JavaScriptBridge.eval("location.host"))
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--server-url="):
+			server_url = arg.get_slice("=", 1)
+
+
 func _notification(what: int) -> void:
 	# Don't leave orphan headless servers behind when the game client exits.
 	if what == NOTIFICATION_PREDELETE or what == NOTIFICATION_WM_CLOSE_REQUEST:
 		_kill_spawned_server()
 
 
-func start_server(port: int) -> void:
+func start_server(port: int, min_players: int = 1) -> void:
 	_is_server = true
 	_logic = DuckServerScript.new()
+	_logic.min_players = min_players
 	var peer := _make_ws_peer()
 	var err := peer.create_server(port, "*")
 	if err != OK:
@@ -56,7 +66,7 @@ func start_server(port: int) -> void:
 	multiplayer.multiplayer_peer = peer
 	if not multiplayer.peer_disconnected.is_connected(_on_peer_disconnected):
 		multiplayer.peer_disconnected.connect(_on_peer_disconnected)
-	print("Show me your duck server on port %s" % port)
+	print("Show me your duck server on port %s (min %s players)" % [port, min_players])
 	print("Clients should connect to ws://127.0.0.1:%s" % port)
 	notice.emit("Server listening on %s" % port)
 
@@ -445,11 +455,11 @@ func s_discard_hover(slot: int) -> void:
 
 
 @rpc("authority", "reliable")
-func c_lobby(code: String, players: Array, your_player_id: String, host: bool) -> void:
+func c_lobby(code: String, players: Array, your_player_id: String, host: bool, min_players: int) -> void:
 	room_code = code
 	player_id = your_player_id
 	is_host = host
-	lobby_updated.emit(code, players, host)
+	lobby_updated.emit(code, players, host, min_players)
 
 
 @rpc("authority", "reliable")
@@ -502,7 +512,7 @@ func _broadcast_lobby(code: String) -> void:
 		return
 	var snap: Dictionary = _logic.lobby_snapshot(code)
 	for p in snap.players:
-		rpc_id(int(p.peer_id), "c_lobby", code, snap.players, String(p.player_id), bool(p.host))
+		rpc_id(int(p.peer_id), "c_lobby", code, snap.players, String(p.player_id), bool(p.host), int(snap.min_players))
 
 
 func _broadcast_match(code: String, just_started: bool) -> void:

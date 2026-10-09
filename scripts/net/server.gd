@@ -13,6 +13,8 @@ const ALPHABET := "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 var rooms: Dictionary = {}
 var peer_room: Dictionary = {}
 var rng := RandomNumberGenerator.new()
+## Players needed to start (server launch flag `--min-players`).
+var min_players := GameTypes.MIN_PLAYERS
 
 
 func _init() -> void:
@@ -92,8 +94,8 @@ func start_match(peer_id: int) -> Dictionary:
 		return {"ok": false, "error": "Not in a room"}
 	if peer_id != room.host_peer:
 		return {"ok": false, "error": "Only the host can start"}
-	if room.peers.size() < GameTypes.MIN_PLAYERS:
-		return {"ok": false, "error": "Need at least %s players" % GameTypes.MIN_PLAYERS}
+	if room.peers.size() < min_players:
+		return {"ok": false, "error": "Need at least %s players" % min_players}
 	var infos: Array = []
 	for pid in room.peers.keys():
 		var info: Dictionary = room.peers[pid]
@@ -176,7 +178,7 @@ func lobby_snapshot(code: String) -> Dictionary:
 			"card_front_id": info.cosmetics.card_front_id,
 			"duck_rev": info.duck_rev,
 		})
-	return {"code": code, "players": players, "in_match": room.state != null}
+	return {"code": code, "players": players, "in_match": room.state != null, "min_players": min_players}
 
 
 func snapshots_for_room(code: String) -> Dictionary:

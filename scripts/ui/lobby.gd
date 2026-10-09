@@ -9,13 +9,15 @@ const DuckEditorScript = preload("res://scripts/ui/duck_editor.gd")
 
 const THUMB_BACK := Vector2(24, 32)
 const THUMB_DUCK := Vector2(29, 35)
+const SHARE_HINT := "Share this code"
 
 var _name_edit: LineEdit
-var _url_edit: LineEdit
 var _code_edit: LineEdit
 var _status: Label
 var _lobby_panel: Panel
-var _code_label: Label
+var _code_field: LineEdit
+var _code_hint: Label
+var _min_players := GameTypes.MIN_PLAYERS
 var _player_list: VBoxContainer
 var _start_btn: Button
 var _preview_back: TextureRect
@@ -83,12 +85,6 @@ func _build() -> void:
 	_name_edit.focus_exited.connect(func(): PlayerCosmetics.save_name(_name_edit.text))
 	form.add_child(_name_edit)
 
-	form.add_child(_labeled("Server URL"))
-	_url_edit = LineEdit.new()
-	_url_edit.text = Net.server_url
-	_url_edit.custom_minimum_size = Vector2(0, 36)
-	form.add_child(_url_edit)
-
 	var create := Button.new()
 	create.text = "Create room"
 	create.custom_minimum_size = Vector2(0, 42)
@@ -128,14 +124,29 @@ func _build() -> void:
 	lp.offset_bottom = -16
 	lp.add_theme_constant_override("separation", 8)
 	_lobby_panel.add_child(lp)
-	_code_label = Label.new()
-	_code_label.add_theme_font_size_override("font_size", 28)
-	_code_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	lp.add_child(_code_label)
-	var hint := Label.new()
-	hint.text = "Share this code"
-	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	lp.add_child(hint)
+	# Read-only LineEdit so the code can be selected and Ctrl+C'd (works in the browser too).
+	var code_row := HBoxContainer.new()
+	code_row.add_theme_constant_override("separation", 8)
+	lp.add_child(code_row)
+	_code_field = LineEdit.new()
+	_code_field.editable = false
+	_code_field.selecting_enabled = true
+	_code_field.alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_code_field.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_code_field.custom_minimum_size = Vector2(0, 44)
+	_code_field.add_theme_font_size_override("font_size", 28)
+	_code_field.add_theme_color_override("font_uneditable_color", Color.WHITE)
+	code_row.add_child(_code_field)
+	var copy := Button.new()
+	copy.text = "Copy"
+	copy.custom_minimum_size = Vector2(72, 44)
+	copy.pressed.connect(_copy_code)
+	code_row.add_child(copy)
+	_code_hint = Label.new()
+	_code_hint.text = SHARE_HINT
+	_code_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_code_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	lp.add_child(_code_hint)
 	_player_list = VBoxContainer.new()
 	_player_list.add_theme_constant_override("separation", 6)
 	lp.add_child(_player_list)
@@ -254,25 +265,42 @@ func _display_name() -> String:
 
 func _create_room() -> void:
 	_status.text = "Connecting…"
-	Net.server_url = _url_edit.text.strip_edges()
 	Net.connect_and_create(_display_name(), _cosmetics)
 
 
 func _join_room() -> void:
 	_status.text = "Connecting…"
-	Net.server_url = _url_edit.text.strip_edges()
 	Net.connect_and_join(_code_edit.text.strip_edges().to_upper(), _display_name(), _cosmetics)
 
 
-func _on_lobby(code: String, players: Array, is_host: bool) -> void:
-	_code_label.text = code
+func _on_lobby(code: String, players: Array, is_host: bool, min_players: int) -> void:
+	_code_field.text = code
+	_min_players = min_players
+	var n := players.size()
 	_start_btn.visible = is_host
-	_start_btn.disabled = players.size() < GameTypes.MIN_PLAYERS or players.size() > GameTypes.MAX_PLAYERS
-	_start_btn.text = "Start game (%s)" % players.size()
+	_start_btn.disabled = n < min_players or n > GameTypes.MAX_PLAYERS
+	_start_btn.text = "Start game (%s/%s)" % [n, min_players] if n < min_players else "Start game (%s)" % n
+	_code_hint.text = _share_hint(n)
 	_last_players = players
 	_rebuild_player_rows()
 	_show_lobby(true)
 	_status.text = "In room %s" % code
+
+
+func _share_hint(n: int) -> String:
+	if n < _min_players:
+		return "%s — need at least %s players" % [SHARE_HINT, _min_players]
+	return SHARE_HINT
+
+
+func _copy_code() -> void:
+	if _code_field.text == "":
+		return
+	DisplayServer.clipboard_set(_code_field.text)
+	_code_hint.text = "Copied!"
+	get_tree().create_timer(1.5).timeout.connect(func():
+		if is_instance_valid(_code_hint):
+			_code_hint.text = _share_hint(_last_players.size()))
 
 
 func _rebuild_player_rows() -> void:

@@ -51,6 +51,7 @@ func _init() -> void:
 	_run("server_create_and_join_room", test_server_create_and_join_room)
 	_run("server_rejects_unknown_code", test_server_rejects_unknown_code)
 	_run("server_start_requires_host_allows_one", test_server_start_requires_host_allows_one)
+	_run("server_min_players_flag", test_server_min_players_flag)
 	_run("server_reveal_relay_requires_challenger", test_server_reveal_relay_requires_challenger)
 	_run("server_sanitizes_cosmetics", test_server_sanitizes_cosmetics)
 	_run("snapshot_carries_cosmetics", test_snapshot_carries_cosmetics)
@@ -937,6 +938,22 @@ func test_server_rejects_unknown_code() -> String:
 	var r: Dictionary = srv.join_room(2, "ZZZZ", "X")
 	if r.ok:
 		return "unknown room should fail"
+	return ""
+
+
+func test_server_min_players_flag() -> String:
+	var srv = DuckServerScript.new()
+	srv.min_players = 3
+	var created: Dictionary = srv.create_room(2, "A")
+	srv.join_room(3, created.code, "B")
+	if int(srv.lobby_snapshot(String(created.code)).get("min_players", 0)) != 3:
+		return "lobby snapshot should carry min_players"
+	var short: Dictionary = srv.start_match(2)
+	if short.ok or not String(short.error).contains("3"):
+		return "2 players must not start when 3 are required, got %s" % short
+	srv.join_room(4, created.code, "C")
+	if not srv.start_match(2).ok:
+		return "3 players should start"
 	return ""
 
 
