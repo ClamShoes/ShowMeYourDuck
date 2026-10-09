@@ -1,6 +1,9 @@
 class_name GameTypes
 extends RefCounted
 
+const CardCatalog = preload("res://scripts/ui/card_catalog.gd")
+const DuckStamps = preload("res://scripts/ui/duck_stamps.gd")
+
 enum Phase {
 	LOBBY,
 	PLACE_INITIAL,
@@ -8,6 +11,7 @@ enum Phase {
 	BIDDING,
 	REVEAL,
 	CHOOSE_DISCARD,
+	ROUND_OVER,
 	GAME_OVER,
 }
 
@@ -26,8 +30,14 @@ static func make_card(id: String, owner_id: String, is_duck: bool, art_id: Strin
 	}
 
 
-static func make_player(id: String, display_name: String) -> Dictionary:
+static func make_player(id: String, display_name: String, cosmetics: Dictionary = {}) -> Dictionary:
+	var looks := CardCatalog.sanitize(cosmetics)
 	return {
+		"card_back_id": looks.card_back_id,
+		"card_front_id": looks.card_front_id,
+		"duck_rev": int(cosmetics.get("duck_rev", 0)),
+		"duck_progress": DuckStamps.sanitize_progress(cosmetics.get("duck_progress", {})),
+		"upgrade_offer": [],
 		"id": id,
 		"name": display_name,
 		"hand": [],

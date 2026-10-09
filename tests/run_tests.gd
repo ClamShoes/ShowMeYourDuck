@@ -3,6 +3,15 @@ extends SceneTree
 const GameStateScript = preload("res://scripts/rules/game_state.gd")
 const GameTypes = preload("res://scripts/rules/types.gd")
 const DuckServerScript = preload("res://scripts/net/server.gd")
+const CardCatalog = preload("res://scripts/ui/card_catalog.gd")
+const CardArt = preload("res://scripts/ui/card_art.gd")
+const CardScene = preload("res://scenes/card.tscn")
+const PlayerMatScript = preload("res://scripts/ui/player_mat.gd")
+const DuckDrawing = preload("res://scripts/ui/duck_drawing.gd")
+const PlayerCosmetics = preload("res://scripts/ui/player_cosmetics.gd")
+const DiscardFxScript = preload("res://scripts/ui/discard_fx.gd")
+const StatusTextScript = preload("res://scripts/ui/status_text.gd")
+const DuckStamps = preload("res://scripts/ui/duck_stamps.gd")
 
 var _failed := 0
 var _passed := 0
@@ -21,7 +30,20 @@ func _init() -> void:
 	_run("raise_or_pass_until_one_challenger", test_raise_or_pass_until_one_challenger)
 	_run("must_flip_own_stack_first", test_must_flip_own_stack_first)
 	_run("own_duck_lets_challenger_choose_discard", test_own_duck_lets_challenger_choose_discard)
-	_run("other_duck_discards_random_challenger_card", test_other_duck_discards_random_challenger_card)
+	_run("other_duck_owner_picks_discard", test_other_duck_owner_picks_discard)
+	_run("discard_pick_snapshot_secrecy", test_discard_pick_snapshot_secrecy)
+	_run("server_discard_hover_relay_requires_chooser", test_server_discard_hover_relay_requires_chooser)
+	_run("discard_event_public_hides_card", test_discard_event_public_hides_card)
+	_run("choose_discard_emits_event", test_choose_discard_emits_event)
+	_run("stamp_offers_exclude_earned", test_stamp_offers_exclude_earned)
+	_run("pick_style_fresh_then_random", test_pick_style_fresh_then_random)
+	_run("other_duck_pick_grants_upgrade_own_duck_does_not", test_other_duck_pick_grants_upgrade_own_duck_does_not)
+	_run("discard_style_uses_duck_owner_powers", test_discard_style_uses_duck_owner_powers)
+	_run("apply_duck_upgrade_validates_offer", test_apply_duck_upgrade_validates_offer)
+	_run("server_duck_upgrade_updates_peer_and_rev", test_server_duck_upgrade_updates_peer_and_rev)
+	_run("duck_stamps_bake_places_rotated_stamp", test_duck_stamps_bake_places_rotated_stamp)
+	_run("duck_stamps_bake_flips_horizontally", test_duck_stamps_bake_flips_horizontally)
+	_run("profile_progress_round_trips_and_editor_clears", test_profile_progress_round_trips_and_editor_clears)
 	_run("safe_flips_score_a_point", test_safe_flips_score_a_point)
 	_run("two_points_wins", test_two_points_wins)
 	_run("last_card_eliminates_and_last_player_wins", test_last_card_eliminates_and_last_player_wins)
@@ -29,6 +51,19 @@ func _init() -> void:
 	_run("server_create_and_join_room", test_server_create_and_join_room)
 	_run("server_rejects_unknown_code", test_server_rejects_unknown_code)
 	_run("server_start_requires_host_allows_one", test_server_start_requires_host_allows_one)
+	_run("server_reveal_relay_requires_challenger", test_server_reveal_relay_requires_challenger)
+	_run("server_sanitizes_cosmetics", test_server_sanitizes_cosmetics)
+	_run("snapshot_carries_cosmetics", test_snapshot_carries_cosmetics)
+	_run("card_art_duck_and_safe_faces_differ", test_card_art_duck_and_safe_faces_differ)
+	_run("unrevealed_token_uses_blank_face", test_unrevealed_token_uses_blank_face)
+	_run("stack_fan_is_even_and_fits_mat", test_stack_fan_is_even_and_fits_mat)
+	_run("reveal_rows_fit_screen_and_clear_stack", test_reveal_rows_fit_screen_and_clear_stack)
+	_run("duck_drawing_decode_validates", test_duck_drawing_decode_validates)
+	_run("server_duck_drawing_lobby_only_and_in_snapshot", test_server_duck_drawing_lobby_only_and_in_snapshot)
+	_run("card_art_uses_custom_duck_for_matching_rev", test_card_art_uses_custom_duck_for_matching_rev)
+	_run("card_art_new_drawing_same_rev_replaces_cache", test_card_art_new_drawing_same_rev_replaces_cache)
+	_run("profile_name_round_trips", test_profile_name_round_trips)
+	_run("status_text_is_per_viewer", test_status_text_is_per_viewer)
 	print("\n%d passed, %d failed" % [_passed, _failed])
 	quit(1 if _failed > 0 else 0)
 
@@ -151,8 +186,17 @@ func test_solo_playthrough_scores_and_survives_own_duck() -> String:
 		return r.error
 	if gs.players["p0"].points != 1:
 		return "safe solo challenge should score 1 point"
+	if gs.phase != GameTypes.Phase.ROUND_OVER:
+		return "expected ROUND_OVER after scoring, got %s" % gs.phase
+	if gs.flip_history.is_empty():
+		return "solo reveal should remain in flip_history until Next round"
+	r = gs.next_round("p0")
+	if not r.ok:
+		return r.error
 	if gs.phase != GameTypes.Phase.PLACE_INITIAL:
-		return "next hand should start after scoring"
+		return "next hand should start after Next round"
+	if not gs.flip_history.is_empty():
+		return "flip_history should clear on Next round"
 	# Own Duck must not end a solo match (last-player-standing only for multi-seat tables).
 	r = _place_initial(gs, "p0", true)
 	if not r.ok:
@@ -171,8 +215,13 @@ func test_solo_playthrough_scores_and_survives_own_duck() -> String:
 		return r.error
 	if gs.phase == GameTypes.Phase.GAME_OVER:
 		return "solo own-duck discard must not end the game"
+	if gs.phase != GameTypes.Phase.ROUND_OVER:
+		return "expected ROUND_OVER after duck discard"
+	r = gs.next_round("p0")
+	if not r.ok:
+		return r.error
 	if gs.phase != GameTypes.Phase.PLACE_INITIAL:
-		return "solo should continue with a new hand after discard"
+		return "solo should continue with a new hand after Next round"
 	if gs.players["p0"].points != 1:
 		return "points should still be 1 after failed challenge"
 	return ""
@@ -354,14 +403,327 @@ func test_own_duck_lets_challenger_choose_discard() -> String:
 		return r.error
 	if gs.players["p0"].hand.size() != before - 1:
 		return "challenger should lose one card"
+	if gs.phase != GameTypes.Phase.ROUND_OVER:
+		return "expected ROUND_OVER after duck discard"
+	if gs.next_hand_starter_id != "p0":
+		return "challenger should be next-hand starter"
+	r = gs.next_round("p0")
+	if not r.ok:
+		return r.error
 	if gs.phase != GameTypes.Phase.PLACE_INITIAL:
-		return "next hand should start"
+		return "next hand should start after Next round"
 	if gs.hand_starter_id != "p0":
 		return "challenger starts next hand"
 	return ""
 
 
-func test_other_duck_discards_random_challenger_card() -> String:
+## p0 bids 3, flips its two Safes, then hits p1's Duck → p1 picks one of p0's cards (CHOOSE_DISCARD).
+func _other_duck_failed_game() -> RefCounted:
+	var gs := _game(3, 7)
+	if _place_all_initial_safe(gs) != "":
+		return null
+	gs.place_card("p0", String(gs.players["p0"].hand[0]))
+	gs.place_card("p1", _card_of(gs, "p1", true))
+	gs.place_card("p2", String(gs.players["p2"].hand[0]))
+	gs.open_bid("p0", 3)
+	if _everyone_pass_except_bidder(gs) != "":
+		return null
+	gs.flip_stack("p0", "p0")
+	gs.flip_stack("p0", "p0")
+	gs.flip_stack("p0", "p1")
+	return gs
+
+
+func test_discard_event_public_hides_card() -> String:
+	var gs := _other_duck_failed_game()
+	if gs == null or not gs.pick_discard("p1", 0).ok or gs.phase != GameTypes.Phase.ROUND_OVER:
+		return "setup should end in ROUND_OVER after p1 picks"
+	var pub: Dictionary = gs.public_snapshot().last_discard
+	if String(pub.get("player_id", "")) != "p0" or int(pub.get("seq", 0)) != 1:
+		return "public last_discard should name p0 with seq 1, got %s" % pub
+	if pub.has("card_id") or pub.has("is_duck"):
+		return "public last_discard must not carry card identity: %s" % pub
+	var mine: Dictionary = gs.private_snapshot("p0").last_discard
+	var cid := String(mine.get("card_id", ""))
+	if cid == "" or not mine.has("is_duck"):
+		return "loser's snapshot should carry card_id + is_duck, got %s" % mine
+	if cid in gs.players["p0"].hand:
+		return "discarded card must be gone from the hand"
+	var theirs: Dictionary = gs.private_snapshot("p1").last_discard
+	if theirs.has("card_id") or theirs.has("is_duck"):
+		return "other players' snapshots must not carry card identity: %s" % theirs
+	return ""
+
+
+func test_choose_discard_emits_event() -> String:
+	var gs := _game(3)
+	_place_initial(gs, "p0", true)
+	if _place_all_initial_safe(gs) != "":
+		return "setup place failed"
+	gs.open_bid("p0", 1)
+	if _everyone_pass_except_bidder(gs) != "":
+		return "setup bidding failed"
+	gs.flip_stack("p0", "p0")
+	if gs.phase != GameTypes.Phase.CHOOSE_DISCARD:
+		return "expected CHOOSE_DISCARD"
+	if not gs.public_snapshot().last_discard.is_empty():
+		return "no discard event before the challenger chooses"
+	var pick := String(gs.players["p0"].hand[0])
+	var want_duck: bool = gs.cards[pick].is_duck
+	var r: Dictionary = gs.choose_discard("p0", pick)
+	if not r.ok:
+		return r.error
+	var mine: Dictionary = gs.private_snapshot("p0").last_discard
+	if String(mine.get("card_id", "")) != pick or bool(mine.get("is_duck", not want_duck)) != want_duck:
+		return "chosen discard should be reported to the loser, got %s" % mine
+	if int(gs.public_snapshot().last_discard.get("seq", 0)) != 1:
+		return "choose_discard should bump the seq"
+	return ""
+
+
+func test_stamp_offers_exclude_earned() -> String:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 3
+	var earned: Array = ["katana", "top_hat"]
+	for i in 30:
+		var o: Array = DuckStamps.offers(rng, earned)
+		if o.size() != DuckStamps.OFFER_SIZE:
+			return "expected %s offers, got %s" % [DuckStamps.OFFER_SIZE, o]
+		for id in o:
+			if id in earned or not DuckStamps.STAMPS.has(id) or o.count(id) != 1:
+				return "bad offer %s" % [o]
+	var almost: Array = DuckStamps.STAMPS.keys().slice(1)
+	if DuckStamps.offers(rng, almost) != [DuckStamps.STAMPS.keys()[0]]:
+		return "only the one unearned stamp should be offered"
+	if not DuckStamps.offers(rng, DuckStamps.STAMPS.keys()).is_empty():
+		return "no offers once everything is earned"
+	return ""
+
+
+func test_pick_style_fresh_then_random() -> String:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 5
+	var p := DuckStamps.empty_progress()
+	for i in 10:
+		if DuckStamps.pick_style(p, rng) != "rip":
+			return "no powers means always rip"
+	if DuckStamps.apply_stamp(p, "torch") != "burn" or DuckStamps.apply_stamp(p, "torch") != "":
+		return "torch should unlock burn exactly once"
+	if DuckStamps.pick_style(p, rng) != "burn" or p.fresh != "":
+		return "a fresh power plays first, then clears"
+	var seen := {}
+	for i in 40:
+		seen[DuckStamps.pick_style(p, rng)] = true
+	if seen.keys().size() != 2 or not seen.has("rip") or not seen.has("burn"):
+		return "after fresh, picks come from rip + powers only: %s" % seen.keys()
+	if DuckStamps.apply_stamp(p, "monocle") != "" or p.powers != ["burn"]:
+		return "cosmetic stamps unlock nothing"
+	return ""
+
+
+func test_other_duck_pick_grants_upgrade_own_duck_does_not() -> String:
+	var gs := _other_duck_failed_game()
+	if gs == null or not gs.pick_discard("p1", 0).ok:
+		return "setup: p1 should pick"
+	var offer: Array = gs.private_snapshot("p1").you.get("upgrade_offer", [])
+	if offer.size() != DuckStamps.OFFER_SIZE:
+		return "Duck owner should get %s stamp offers, got %s" % [DuckStamps.OFFER_SIZE, offer]
+	for pid in ["p0", "p2"]:
+		if gs.private_snapshot(pid).you.has("upgrade_offer"):
+			return "%s must not see an offer" % pid
+	if str(gs.public_snapshot()).contains("upgrade_offer") or str(gs.public_snapshot()).contains("duck_progress"):
+		return "public snapshot must not mention upgrades"
+	gs.next_round("p0")
+	if gs.private_snapshot("p1").you.get("upgrade_offer", []) != offer:
+		return "an unused offer stays pending across rounds"
+	var own := _game(3)
+	_place_initial(own, "p0", true)
+	_place_all_initial_safe(own)
+	own.open_bid("p0", 1)
+	_everyone_pass_except_bidder(own)
+	own.flip_stack("p0", "p0")
+	own.choose_discard("p0", String(own.players["p0"].hand[0]))
+	for pid in own.player_order:
+		if own.private_snapshot(pid).you.has("upgrade_offer"):
+			return "flipping your own Duck grants nobody an upgrade"
+	return ""
+
+
+func test_discard_style_uses_duck_owner_powers() -> String:
+	var gs := _other_duck_failed_game()
+	if gs == null:
+		return "setup failed"
+	DuckStamps.apply_stamp(gs.players["p1"].duck_progress, "katana")
+	DuckStamps.apply_stamp(gs.players["p0"].duck_progress, "tnt")
+	gs.pick_discard("p1", 0)
+	var pub: Dictionary = gs.public_snapshot().last_discard
+	if String(pub.get("style", "")) != "samurai":
+		return "the Duck owner's fresh power should style the discard: %s" % pub
+	var plain := _other_duck_failed_game()
+	plain.pick_discard("p1", 0)
+	if String(plain.public_snapshot().last_discard.get("style", "")) != "rip":
+		return "no powers means rip"
+	return ""
+
+
+func test_apply_duck_upgrade_validates_offer() -> String:
+	var gs := _other_duck_failed_game()
+	gs.pick_discard("p1", 0)
+	var p: Dictionary = gs.players["p1"]
+	p.upgrade_offer = ["tnt", "cane", "eyes_star"]
+	if gs.apply_duck_upgrade("p1", "katana").ok:
+		return "a stamp that wasn't offered must be rejected"
+	if gs.apply_duck_upgrade("p0", "tnt").ok:
+		return "someone without the offer must be rejected"
+	var rev := int(p.duck_rev)
+	if not gs.apply_duck_upgrade("p1", "tnt").ok:
+		return "offered stamp should apply"
+	if p.duck_progress.powers != ["explode"] or p.duck_progress.fresh != "explode" or "tnt" not in p.duck_progress.earned:
+		return "tnt should unlock explode: %s" % p.duck_progress
+	if int(p.duck_rev) != rev + 1 or not p.upgrade_offer.is_empty():
+		return "upgrade should bump duck_rev and clear the offer"
+	if gs.apply_duck_upgrade("p1", "cane").ok:
+		return "the offer is single use"
+	return ""
+
+
+func test_server_duck_upgrade_updates_peer_and_rev() -> String:
+	var srv = DuckServerScript.new()
+	var progress := {"earned": ["top_hat"], "powers": [], "fresh": ""}
+	var created: Dictionary = srv.create_room(2, "A", {"duck_progress": progress})
+	srv.join_room(3, created.code, "B")
+	var room: Dictionary = srv.rooms[created.code]
+	if room.peers[2].duck_progress.earned != ["top_hat"]:
+		return "peer should carry its saved progress"
+	if srv.apply_duck_upgrade(2, "katana", _solid_drawing(Color.RED)).ok:
+		return "no upgrade outside a match"
+	srv.start_match(2)
+	var gp: Dictionary = room.state.players["p2"]
+	if gp.duck_progress.earned != ["top_hat"]:
+		return "match should start from the peer's progress"
+	gp.upgrade_offer = ["katana", "cane", "monocle"]
+	if srv.apply_duck_upgrade(2, "katana", "junk".to_utf8_buffer()).ok:
+		return "bad PNG must be rejected"
+	if srv.apply_duck_upgrade(2, "tnt", _solid_drawing(Color.RED)).ok:
+		return "stamp not in the offer must be rejected"
+	var r: Dictionary = srv.apply_duck_upgrade(2, "katana", _solid_drawing(Color.RED))
+	if not r.ok or int(r.rev) != 1 or String(r.player_id) != "p2":
+		return "upgrade should succeed with rev 1, got %s" % r
+	var info: Dictionary = room.peers[2]
+	if int(info.duck_rev) != 1 or info.duck_png.is_empty() or "samurai" not in info.duck_progress.powers:
+		return "peer should keep the new art, rev and powers for the next match"
+	for p in room.state.public_snapshot().players:
+		if String(p.id) == "p2" and int(p.duck_rev) != 1:
+			return "snapshot should carry the new duck_rev"
+	return ""
+
+
+func test_duck_stamps_bake_places_rotated_stamp() -> String:
+	var base := DuckDrawing.blank_image()
+	base.fill(Color.WHITE)
+	var stamp := Image.create(10, 2, false, Image.FORMAT_RGBA8)
+	stamp.fill(Color.RED)
+	var out := DuckStamps.bake(base, stamp, Vector2(50, 50), PI * 0.5, 2.0)
+	if out.get_size() != base.get_size():
+		return "bake must keep the duck size"
+	if out.get_pixel(50, 50) != Color.RED:
+		return "stamp centre should land at the given point"
+	# 10x2 rotated 90° and doubled → 4 wide, 20 tall.
+	if out.get_pixel(50, 41) != Color.RED or out.get_pixel(50, 58) != Color.RED:
+		return "rotated stamp should run vertically"
+	if out.get_pixel(60, 50) != Color.WHITE or out.get_pixel(50, 62) != Color.WHITE:
+		return "pixels outside the stamp must be untouched"
+	if base.get_pixel(50, 50) != Color.WHITE:
+		return "bake must not modify the base"
+	return ""
+
+
+func test_duck_stamps_bake_flips_horizontally() -> String:
+	var base := DuckDrawing.blank_image()
+	base.fill(Color.WHITE)
+	var stamp := Image.create(2, 1, false, Image.FORMAT_RGBA8)
+	stamp.set_pixel(0, 0, Color.RED)
+	stamp.set_pixel(1, 0, Color.BLUE)
+	# Scale 4 → 8x4 on the duck, centred at (50, 50): left half x 46..49, right half x 50..53.
+	var plain := DuckStamps.bake(base, stamp, Vector2(50, 50), 0.0, 4.0)
+	var flipped := DuckStamps.bake(base, stamp, Vector2(50, 50), 0.0, 4.0, true)
+	if plain.get_pixel(47, 50) != Color.RED or plain.get_pixel(52, 50) != Color.BLUE:
+		return "unflipped stamp should be red on the left"
+	if flipped.get_pixel(47, 50) != Color.BLUE or flipped.get_pixel(52, 50) != Color.RED:
+		return "flipped stamp should be red on the right"
+	if flipped.get_size() != base.get_size():
+		return "flipped bake must keep the duck size"
+	return ""
+
+
+func test_profile_progress_round_trips_and_editor_clears() -> String:
+	var old_path: String = PlayerCosmetics.path
+	PlayerCosmetics.path = "user://test_progress.cfg"
+	PlayerCosmetics.save_progress({"earned": ["katana", "bogus"], "powers": ["samurai"], "fresh": "samurai"})
+	var loaded := PlayerCosmetics.load_progress()
+	var via_local: Dictionary = PlayerCosmetics.load_local().get("duck_progress", {})
+	PlayerCosmetics.save_progress({})
+	var cleared := PlayerCosmetics.load_progress()
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(PlayerCosmetics.path))
+	PlayerCosmetics.path = old_path
+	if loaded.earned != ["katana"] or loaded.powers != ["samurai"] or loaded.fresh != "samurai":
+		return "progress should round-trip (sanitised): %s" % loaded
+	if via_local != loaded:
+		return "load_local should carry duck_progress: %s" % via_local
+	if not cleared.earned.is_empty() or not cleared.powers.is_empty():
+		return "saving empty progress (duck edited) clears it: %s" % cleared
+	return ""
+
+
+func test_discard_pick_snapshot_secrecy() -> String:
+	var gs := _other_duck_failed_game()
+	if gs == null or gs.phase != GameTypes.Phase.CHOOSE_DISCARD:
+		return "setup should end in CHOOSE_DISCARD"
+	var faces: Array = gs.private_snapshot("p0").get("discard_slot_faces", [])
+	if faces.size() != gs.discard_order.size():
+		return "challenger should see one face per slot"
+	for i in faces.size():
+		if String(faces[i].id) != String(gs.discard_order[i]):
+			return "challenger's faces must follow slot order"
+	for pid in ["p1", "p2"]:
+		var snap: Dictionary = gs.private_snapshot(pid)
+		if snap.has("discard_slot_faces"):
+			return "%s must not get the challenger's faces" % pid
+		var text := JSON.stringify(snap)
+		for cid in gs.players["p0"].hand:
+			if text.contains(String(cid)):
+				return "%s's snapshot leaks p0's card %s" % [pid, cid]
+		if int(snap.discard_slots) != faces.size() or String(snap.discard_chooser_id) != "p1":
+			return "%s should see the slot count and chooser" % pid
+	return ""
+
+
+func test_server_discard_hover_relay_requires_chooser() -> String:
+	var srv = DuckServerScript.new()
+	var created: Dictionary = srv.create_room(2, "A")
+	srv.join_room(3, created.code, "B")
+	srv.start_match(2)
+	var gs = srv.rooms[created.code].state
+	gs.phase = GameTypes.Phase.CHOOSE_DISCARD
+	gs.challenger_id = "p2"
+	gs.discard_chooser_id = "p3"
+	gs.discard_order = gs.players["p2"].hand.duplicate()
+	var ok: Dictionary = srv.validate_discard_hover_relay(3, 1)
+	if not ok.ok or ok.peer_ids != [2]:
+		return "chooser should relay to the other peer: %s" % ok
+	if not srv.validate_discard_hover_relay(3, -1).ok:
+		return "chooser should be able to clear the hover"
+	if srv.validate_discard_hover_relay(2, 1).ok:
+		return "challenger must not relay a hover"
+	if srv.validate_discard_hover_relay(3, gs.discard_order.size()).ok:
+		return "out-of-range slot must not relay"
+	gs.discard_order.clear()
+	if srv.validate_discard_hover_relay(3, 0).ok:
+		return "own-Duck discard has no pick row to hover"
+	return ""
+
+
+func test_other_duck_owner_picks_discard() -> String:
 	var gs := _game(3, 7)
 	var err := _place_all_initial_safe(gs)
 	if err != "":
@@ -391,17 +753,51 @@ func test_other_duck_discards_random_challenger_card() -> String:
 	r = gs.flip_stack("p0", "p0")
 	if not r.ok:
 		return r.error
-	var cards_before: int = gs.players["p0"].hand.size() + gs.players["p0"].stack.size()
-	# also count already flipped belonging to p0 — snapshot after fail collects to hand
+	# Revealed safes stay in flip_history until Next round; only live hand is discardable.
 	r = gs.flip_stack("p0", "p1")
 	if not r.ok:
 		return r.error
-	if gs.phase == GameTypes.Phase.CHOOSE_DISCARD:
-		return "other duck should not let challenger choose"
-	if gs.players["p0"].hand.size() != 3:
-		return "p0 should have 3 cards after random discard of 1 from 4, got %s" % gs.players["p0"].hand.size()
-	if gs.hand_starter_id != "p0":
+	if gs.phase != GameTypes.Phase.CHOOSE_DISCARD or gs.discard_chooser_id != "p1":
+		return "p1 (the Duck's owner) should be choosing, got phase %s chooser %s" % [gs.phase, gs.discard_chooser_id]
+	if gs.current_player_id != "p1":
+		return "the chooser should be the current player"
+	var hand_before_duck: int = gs.players["p0"].hand.size()
+	if int(gs.public_snapshot().discard_slots) != hand_before_duck:
+		return "one slot per card in p0's hand"
+	if gs.discard_order.duplicate().all(func(c): return c in gs.players["p0"].hand) == false:
+		return "slots must be p0's hand cards"
+	if gs.pick_discard("p0", 0).ok or gs.pick_discard("p2", 0).ok:
+		return "only the Duck's owner may pick"
+	if gs.choose_discard("p0", String(gs.players["p0"].hand[0])).ok:
+		return "challenger must not choose their own discard after another player's Duck"
+	if gs.pick_discard("p1", hand_before_duck).ok:
+		return "out-of-range slot must fail"
+	var k := hand_before_duck - 1
+	var want := String(gs.discard_order[k])
+	r = gs.pick_discard("p1", k)
+	if not r.ok:
+		return r.error
+	if want in gs.players["p0"].hand or gs.cards.has(want):
+		return "picked slot's card should be destroyed"
+	if int(gs.last_discard.slot) != k or int(gs.public_snapshot().last_discard.slot) != k:
+		return "last_discard should carry the picked slot"
+	if gs.players["p0"].hand.size() != hand_before_duck - 1:
+		return "p0 should lose 1 from live hand after other duck, got %s (was %s)" % [
+			gs.players["p0"].hand.size(), hand_before_duck
+		]
+	if gs.flip_history.is_empty():
+		return "flip_history should remain until Next round"
+	if gs.phase != GameTypes.Phase.ROUND_OVER:
+		return "expected ROUND_OVER after other duck"
+	if gs.next_hand_starter_id != "p0":
 		return "challenger still starts next hand"
+	r = gs.next_round("p0")
+	if not r.ok:
+		return r.error
+	if gs.hand_starter_id != "p0":
+		return "challenger still starts next hand after Next round"
+	if not gs.flip_history.is_empty():
+		return "flip_history should clear on Next round"
 	return ""
 
 
@@ -421,8 +817,24 @@ func test_safe_flips_score_a_point() -> String:
 		return r.error
 	if gs.players["p0"].points != 1:
 		return "expected 1 point"
+	if bool(gs.last_revealed.get("is_duck", true)):
+		return "last_revealed should be Safe after successful challenge"
+	if String(gs.last_revealed.get("target_player_id", "")) != "p0":
+		return "last_revealed target should be p0"
+	var snap: Dictionary = gs.public_snapshot()
+	if bool(snap.last_revealed.get("is_duck", true)):
+		return "snapshot last_revealed should be Safe"
+	if gs.phase != GameTypes.Phase.ROUND_OVER:
+		return "expected ROUND_OVER after success"
+	if gs.flip_history.is_empty():
+		return "revealed cards should stay in flip_history until Next round"
+	r = gs.next_round("p0")
+	if not r.ok:
+		return r.error
 	if gs.phase != GameTypes.Phase.PLACE_INITIAL:
-		return "next hand after success"
+		return "next hand after Next round"
+	if not gs.flip_history.is_empty():
+		return "flip_history should clear on Next round"
 	return ""
 
 
@@ -443,6 +855,9 @@ func test_two_points_wins() -> String:
 		return "expected GAME_OVER"
 	if gs.winner_id != "p0":
 		return "p0 should win"
+	var snap: Dictionary = gs.public_snapshot()
+	if snap.flip_history.size() != 1 or String(snap.last_revealed.get("target_player_id", "")) != "p0":
+		return "winning flip must stay in flip_history / last_revealed so clients can animate it"
 	return ""
 
 
@@ -557,4 +972,335 @@ func test_server_start_requires_host_allows_one() -> String:
 	var s3: Dictionary = snaps[3]
 	if s3.you.id == s2.you.id:
 		return "private snapshots must be per player"
+	return ""
+
+
+func test_server_reveal_relay_requires_challenger() -> String:
+	var srv = DuckServerScript.new()
+	var created: Dictionary = srv.create_room(2, "A")
+	srv.join_room(3, created.code, "B")
+	var started: Dictionary = srv.start_match(2)
+	if not started.ok:
+		return started.get("error", "start failed")
+	var room: Dictionary = srv.rooms[created.code]
+	var gs = room.state
+	# Force REVEAL with a stack so relay validation can pass for the challenger.
+	gs.phase = GameTypes.Phase.REVEAL
+	gs.challenger_id = "p2"
+	gs.flips_remaining = 1
+	if gs.players["p2"].stack.is_empty():
+		var cid: String = String(gs.players["p2"].hand[0])
+		gs.players["p2"].hand.erase(cid)
+		gs.players["p2"].stack.append(cid)
+	var ok: Dictionary = srv.validate_reveal_relay(2, "p2")
+	if not ok.ok:
+		return "challenger should relay: %s" % ok.get("error", "")
+	if ok.peer_ids.size() != 1 or int(ok.peer_ids[0]) != 3:
+		return "should relay to other peer only"
+	var non_chal: Dictionary = srv.validate_reveal_relay(3, "p2")
+	if non_chal.ok:
+		return "non-challenger must not relay"
+	gs.phase = GameTypes.Phase.BIDDING
+	var wrong_phase: Dictionary = srv.validate_reveal_relay(2, "p2")
+	if wrong_phase.ok:
+		return "wrong phase must not relay"
+	gs.phase = GameTypes.Phase.REVEAL
+	gs.players["p2"].stack.clear()
+	var empty_stack: Dictionary = srv.validate_reveal_relay(2, "p2")
+	if empty_stack.ok:
+		return "empty stack must not relay"
+	return ""
+
+
+func test_server_sanitizes_cosmetics() -> String:
+	var srv = DuckServerScript.new()
+	var created: Dictionary = srv.create_room(2, "A", {"card_back_id": "nope", "card_front_id": ""})
+	srv.join_room(3, created.code, "B", {"card_back_id": "crimson", "card_front_id": "gilded"})
+	var lobby: Dictionary = srv.lobby_snapshot(String(created.code))
+	for p in lobby.players:
+		if int(p.peer_id) == 2:
+			if p.card_back_id != CardCatalog.DEFAULT_BACK or p.card_front_id != CardCatalog.DEFAULT_FRONT:
+				return "unknown ids should fall back to defaults, got %s/%s" % [p.card_back_id, p.card_front_id]
+		elif p.card_back_id != "crimson" or p.card_front_id != "gilded":
+			return "valid ids should be kept"
+	var bad: Dictionary = srv.set_cosmetics(3, "not a dictionary")
+	if not bad.ok:
+		return "set_cosmetics in lobby should succeed (sanitised)"
+	if srv.rooms[created.code].peers[3].cosmetics.card_back_id != CardCatalog.DEFAULT_BACK:
+		return "garbage cosmetics should sanitise to defaults"
+	srv.start_match(2)
+	if srv.set_cosmetics(3, {"card_back_id": "jade"}).ok:
+		return "cosmetics must not change mid-match"
+	return ""
+
+
+func test_snapshot_carries_cosmetics() -> String:
+	var gs = GameStateScript.new()
+	var r: Dictionary = gs.start_match([
+		{"id": "a", "name": "A", "cosmetics": {"card_back_id": "frost", "card_front_id": "corners"}},
+		{"id": "b", "name": "B"},
+	], "a")
+	if not r.ok:
+		return r.error
+	var by_id := {}
+	for p in gs.public_snapshot().players:
+		by_id[p.id] = p
+	var a: Dictionary = by_id["a"]
+	if a.card_back_id != "frost" or a.card_front_id != "corners" or int(a.duck_rev) != 0:
+		return "player a cosmetics missing from snapshot: %s" % a
+	if by_id["b"].card_back_id != CardCatalog.DEFAULT_BACK:
+		return "player without cosmetics should get defaults"
+	return ""
+
+
+func test_card_art_duck_and_safe_faces_differ() -> String:
+	CardArt.set_players([{"id": "a", "card_back_id": "classic", "card_front_id": "gilded"}])
+	var safe: Texture2D = CardArt.face_texture("a", false)
+	var duck: Texture2D = CardArt.face_texture("a", true)
+	var blank: Texture2D = CardArt.blank_face_texture("a")
+	if safe == duck:
+		return "duck and safe faces must be different textures"
+	var size := Vector2i(CardArt.CARD_SIZE)
+	for t in [safe, duck, blank, CardArt.back_texture("a")]:
+		if Vector2i(t.get_size()) != size:
+			return "card textures should be %s, got %s" % [size, t.get_size()]
+	if safe.get_image().get_data() == duck.get_image().get_data():
+		return "duck and safe faces must differ in pixels"
+	if blank.get_image().get_data() == safe.get_image().get_data():
+		return "blank face must not carry the Safe emblem"
+	return ""
+
+
+func test_unrevealed_token_uses_blank_face() -> String:
+	CardArt.set_players([{"id": "a", "card_back_id": "jade", "card_front_id": "paper"}])
+	var token = CardScene.instantiate()
+	token.setup_stack_token(false, "a")
+	var front: Texture2D = token._card_front.texture
+	var back: Texture2D = token._card_back.texture
+	token.free()
+	if front != CardArt.blank_face_texture("a"):
+		return "unrevealed token face sprite must be the blank frame"
+	if front == CardArt.face_texture("a", true) or front == CardArt.face_texture("a", false):
+		return "unrevealed token must not carry Duck/Safe"
+	if back != CardArt.back_texture("a"):
+		return "token back should be the owner's back"
+	return ""
+
+
+func test_stack_fan_is_even_and_fits_mat() -> String:
+	var max_stack := GameTypes.SAFE_PER_PLAYER + 1
+	var mat_rect := Rect2(Vector2.ZERO, PlayerMatScript.MAT_SIZE)
+	var drawn := CardView.SIZE * PlayerMatScript.TOKEN_SCALE
+	var shrink := CardView.SIZE * 0.5 * (1.0 - PlayerMatScript.TOKEN_SCALE)
+	var prev := Vector2.INF
+	var step := Vector2.INF
+	for i in max_stack:
+		var node_pos: Vector2 = PlayerMatScript.slot_local(i)
+		var card_rect := Rect2(node_pos + shrink, drawn)
+		if not mat_rect.encloses(card_rect):
+			return "slot %s (%s) spills outside the mat %s" % [i, card_rect, mat_rect]
+		if prev.is_finite():
+			var d := node_pos - prev
+			if step.is_finite() and not d.is_equal_approx(step):
+				return "fan step should be even, got %s then %s" % [step, d]
+			if absf(d.x) < 12.0:
+				return "each card's edge should stay visible (step %s)" % d
+			step = d
+		prev = node_pos
+	return ""
+
+
+func _reveal_rect(mat_pos: Vector2, dir: Vector2, i: int) -> Rect2:
+	var shrink := CardView.SIZE * 0.5 * (1.0 - PlayerMatScript.REVEAL_SCALE)
+	return Rect2(mat_pos + PlayerMatScript.reveal_slot_for(dir, i) + shrink, CardView.SIZE * PlayerMatScript.REVEAL_SCALE)
+
+
+func _token_rect(mat_pos: Vector2, i: int) -> Rect2:
+	var shrink := CardView.SIZE * 0.5 * (1.0 - PlayerMatScript.TOKEN_SCALE)
+	return Rect2(mat_pos + PlayerMatScript.slot_local(i) + shrink, CardView.SIZE * PlayerMatScript.TOKEN_SCALE)
+
+
+func test_reveal_rows_fit_screen_and_clear_stack() -> String:
+	var max_cards := GameTypes.SAFE_PER_PLAYER + 1
+	var screen := Rect2(0, 0, 1280, 720)
+	for n in range(2, 7):
+		var seats: Array = PlayerMatScript.seat_layout(n)
+		for s in seats:
+			for i in max_cards:
+				var r := _reveal_rect(s.pos, s.dir, i)
+				if not screen.encloses(r):
+					return "%dp seat %s dir %s: reveal %d %s leaves the screen" % [n, s.pos, s.dir, i, r]
+			# k flipped off a full stack leaves max_cards - k tokens; the new top must stay clear.
+			for k in range(1, max_cards):
+				var top := _token_rect(s.pos, max_cards - k - 1)
+				for i in k:
+					var hit := _reveal_rect(s.pos, s.dir, i).intersection(top)
+					if hit.get_area() > top.get_area() * 0.02:
+						return "%dp seat %s: reveal %d covers top token with %d left" % [n, s.pos, i, max_cards - k]
+		if n > 4:
+			continue
+		# Rows of different mats must not collide (2-4 players).
+		for a in seats.size():
+			for b in range(a + 1, seats.size()):
+				for i in max_cards:
+					for j in max_cards:
+						var ra := _reveal_rect(seats[a].pos, seats[a].dir, i)
+						var rb := _reveal_rect(seats[b].pos, seats[b].dir, j)
+						if ra.intersects(rb):
+							return "%dp: reveal rows of seats %s and %s overlap" % [n, seats[a].pos, seats[b].pos]
+	return ""
+
+
+func _solid_drawing(c: Color) -> PackedByteArray:
+	var img := DuckDrawing.blank_image()
+	img.fill(c)
+	return DuckDrawing.encode(img)
+
+
+func test_duck_drawing_decode_validates() -> String:
+	if DuckDrawing.decode(_solid_drawing(Color.RED)) == null:
+		return "valid 144x176 PNG should decode"
+	var small := Image.create(100, 100, false, Image.FORMAT_RGBA8)
+	if DuckDrawing.decode(small.save_png_to_buffer()) != null:
+		return "wrong-size PNG must be rejected"
+	if DuckDrawing.decode("not a png at all, just text".to_utf8_buffer()) != null:
+		return "garbage must be rejected"
+	var noise := DuckDrawing.blank_image()
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 7
+	for y in DuckDrawing.SIZE.y:
+		for x in DuckDrawing.SIZE.x:
+			noise.set_pixel(x, y, Color(rng.randf(), rng.randf(), rng.randf(), 1.0))
+	var big := DuckDrawing.encode(noise)
+	if big.size() <= DuckDrawing.MAX_BYTES:
+		return "noise PNG should exceed MAX_BYTES for this test (got %s)" % big.size()
+	if DuckDrawing.decode(big) != null:
+		return "oversized PNG must be rejected"
+	return ""
+
+
+func test_server_duck_drawing_lobby_only_and_in_snapshot() -> String:
+	var srv = DuckServerScript.new()
+	var created: Dictionary = srv.create_room(2, "A")
+	srv.join_room(3, created.code, "B")
+	var r1: Dictionary = srv.set_duck_drawing(2, _solid_drawing(Color.RED))
+	var r2: Dictionary = srv.set_duck_drawing(2, _solid_drawing(Color.BLUE))
+	if not r1.ok or not r2.ok or int(r2.rev) != 2:
+		return "lobby duck changes should succeed and bump rev, got %s / %s" % [r1, r2]
+	if srv.set_duck_drawing(3, "junk".to_utf8_buffer()).ok:
+		return "invalid PNG must be rejected"
+	var arts: Array = srv.duck_arts(String(created.code))
+	if arts.size() != 1 or String(arts[0].player_id) != String(r2.player_id):
+		return "only players with a drawing should be synced to joiners: %s" % [arts]
+	for p in srv.lobby_snapshot(String(created.code)).players:
+		var want := 2 if int(p.peer_id) == 2 else 0
+		if int(p.duck_rev) != want:
+			return "lobby snapshot duck_rev wrong for %s" % p.peer_id
+	srv.start_match(2)
+	for p in srv.rooms[created.code].state.public_snapshot().players:
+		var want := 2 if String(p.id) == String(r2.player_id) else 0
+		if int(p.duck_rev) != want:
+			return "match snapshot duck_rev should match the lobby drawing (%s)" % p
+	if srv.set_duck_drawing(2, _solid_drawing(Color.GREEN)).ok:
+		return "duck must not change mid-match"
+	return ""
+
+
+func test_card_art_uses_custom_duck_for_matching_rev() -> String:
+	CardArt.set_players([{"id": "d", "card_back_id": "classic", "card_front_id": "bordered", "duck_rev": 1}])
+	var center := Vector2i(CardArt.CARD_SIZE / 2)
+	var default_px := CardArt.face_texture("d", true).get_image().get_pixelv(center)
+	var red := DuckDrawing.blank_image()
+	red.fill(Color.RED)
+	CardArt.set_duck_image("d", 1, red)
+	var custom_px := CardArt.face_texture("d", true).get_image().get_pixelv(center)
+	if not custom_px.is_equal_approx(Color.RED):
+		return "matching rev should show the drawing, centre is %s" % custom_px
+	if custom_px.is_equal_approx(default_px):
+		return "custom duck should differ from the default"
+	CardArt.set_duck_image("d", 0, red)
+	if not CardArt.face_texture("d", true).get_image().get_pixelv(center).is_equal_approx(default_px):
+		return "stale rev should fall back to the default duck"
+	if CardArt.face_texture("d", false).get_image().get_pixelv(center).is_equal_approx(Color.RED):
+		return "Safe face must never use the duck drawing"
+	return ""
+
+
+## Revs restart per room, so a new drawing can arrive with an (owner, rev) seen before.
+func test_card_art_new_drawing_same_rev_replaces_cache() -> String:
+	CardArt.set_players([{"id": "r", "duck_rev": 1}, {"id": "other", "duck_rev": 0}])
+	var center := Vector2i(CardArt.CARD_SIZE / 2)
+	var mini_center := Vector2i(CardArt.MINI_DUCK_SIZE / 2)
+	var other_before := CardArt.face_texture("other", true)
+	var red := DuckDrawing.blank_image()
+	red.fill(Color.RED)
+	CardArt.set_duck_image("r", 1, red)
+	if not CardArt.face_texture("r", true).get_image().get_pixelv(center).is_equal_approx(Color.RED):
+		return "first drawing should show on the face"
+	if not CardArt.mini_duck_texture("r").get_image().get_pixelv(mini_center).is_equal_approx(Color.RED):
+		return "first drawing should show on the mini duck"
+	var blue := DuckDrawing.blank_image()
+	blue.fill(Color.BLUE)
+	CardArt.set_duck_image("r", 1, blue)
+	var face_px := CardArt.face_texture("r", true).get_image().get_pixelv(center)
+	if not face_px.is_equal_approx(Color.BLUE):
+		return "new drawing with the same rev should replace the cached face, centre is %s" % face_px
+	var mini_px := CardArt.mini_duck_texture("r").get_image().get_pixelv(mini_center)
+	if not mini_px.is_equal_approx(Color.BLUE):
+		return "new drawing with the same rev should replace the cached mini duck, centre is %s" % mini_px
+	if CardArt.face_texture("other", true) != other_before:
+		return "eviction must not touch other players' (default) duck textures"
+	return ""
+
+
+func test_profile_name_round_trips() -> String:
+	var old_path: String = PlayerCosmetics.path
+	PlayerCosmetics.path = "user://test_profile.cfg"
+	PlayerCosmetics.save_name("  Quackers  ")
+	PlayerCosmetics.save_local({"card_back_id": "jade", "card_front_id": "paper"})
+	var n := PlayerCosmetics.load_name()
+	var c := PlayerCosmetics.load_local()
+	PlayerCosmetics.save_name("")
+	var blank := PlayerCosmetics.load_name()
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(PlayerCosmetics.path))
+	PlayerCosmetics.path = old_path
+	if n != "Quackers":
+		return "name should round-trip trimmed, got '%s'" % n
+	if c.card_back_id != "jade" or c.card_front_id != "paper":
+		return "saving cards must not lose them: %s" % c
+	if blank != PlayerCosmetics.DEFAULT_NAME:
+		return "empty name should fall back to default, got '%s'" % blank
+	return ""
+
+
+func test_status_text_is_per_viewer() -> String:
+	var gs := _game(3)
+	var say := func(pid: String) -> String: return StatusTextScript.for_viewer(gs.private_snapshot(pid), pid)
+	_place_initial(gs, "p0")
+	if not say.call("p1").begins_with("Play one card"):
+		return "unplaced viewer should be told to play: %s" % say.call("p1")
+	if say.call("p0") != "Waiting for P1, P2 to play their opening card…":
+		return "placed viewer should see who's left: %s" % say.call("p0")
+	_place_initial(gs, "p1")
+	_place_initial(gs, "p2")
+	if not say.call("p0").begins_with("Your turn"):
+		return "current player should get 'Your turn': %s" % say.call("p0")
+	if say.call("p1") != "Waiting for P0 to play a card or bid…":
+		return "others should wait on P0: %s" % say.call("p1")
+	gs.open_bid("p0", 2)
+	if not say.call("p1").begins_with("Your bid"):
+		return "bidder on turn should get 'Your bid': %s" % say.call("p1")
+	if say.call("p0") != "You lead with 2. Waiting for P1…":
+		return "top bidder should see they lead: %s" % say.call("p0")
+	if say.call("p2") != "P1 is bidding — current bid 2 by P0.":
+		return "others should see who's bidding: %s" % say.call("p2")
+	var snap: Dictionary = gs.private_snapshot("p1")
+	snap.phase = GameTypes.Phase.ROUND_OVER
+	snap.you_are_host = false
+	snap.host_id = "p0"
+	if StatusTextScript.for_viewer(snap, "p1") != "Round over — waiting for P0 to start the next round.":
+		return "non-host should wait for the host: %s" % StatusTextScript.for_viewer(snap, "p1")
+	snap.you_are_host = true
+	if not StatusTextScript.for_viewer(snap, "p1").contains("press Next round"):
+		return "host should be told to press Next round"
 	return ""

@@ -5,15 +5,27 @@ signal match_updated(snapshot: Dictionary)
 signal match_started
 signal connection_failed(msg: String)
 signal notice(msg: String)
+signal reveal_progress(target_player_id: String, t: float)
+signal reveal_cancel(target_player_id: String)
+## Duck owner's hover over the centre pick row; -1 = none.
+signal discard_hover(slot: int)
+signal duck_art_updated(player_id: String)
 
 const DuckServerScript = preload("res://scripts/net/server.gd")
+const DuckDrawing = preload("res://scripts/ui/duck_drawing.gd")
+const CardArt = preload("res://scripts/ui/card_art.gd")
+const DEFAULT_PORT := 9080
+## Duck PNGs (up to DuckDrawing.MAX_BYTES each) can queue together on join; default is 64 KiB.
+const WS_BUFFER_BYTES := 1 << 20
 
-var server_url := "ws://127.0.0.1:9080"
+var server_url := "ws://127.0.0.1:%s" % DEFAULT_PORT
 var room_code := ""
 var player_id := ""
 var is_host := false
 var last_snapshot: Dictionary = {}
 var _display_name := "Mallard"
+var _cosmetics: Dictionary = {}
+var _duck_png := PackedByteArray()
 var _pending_action := "" # create | join
 var _pending_join_code := ""
 var _logic
@@ -21,16 +33,25 @@ var _is_server := false
 var _server_pid := -1
 var _connect_tries := 0
 var _retrying := false
+var _spawn_attempted := false
+
+
+func _notification(what: int) -> void:
+	# Don't leave orphan headless servers behind when the game client exits.
+	if what == NOTIFICATION_PREDELETE or what == NOTIFICATION_WM_CLOSE_REQUEST:
+		_kill_spawned_server()
 
 
 func start_server(port: int) -> void:
 	_is_server = true
 	_logic = DuckServerScript.new()
-	var peer := WebSocketMultiplayerPeer.new()
+	var peer := _make_ws_peer()
 	var err := peer.create_server(port, "*")
 	if err != OK:
 		push_error("Could not bind server on %s: %s" % [port, err])
-		print("Failed to bind WebSocket server on port %s (error %s)" % [port, err])
+		print("Failed to bind WebSocket server on port %s (error %s) — exiting." % [port, err])
+		# Critical: exit so failed binds don't accumulate idle headless processes.
+		get_tree().quit(1)
 		return
 	multiplayer.multiplayer_peer = peer
 	if not multiplayer.peer_disconnected.is_connected(_on_peer_disconnected):
@@ -40,15 +61,24 @@ func start_server(port: int) -> void:
 	notice.emit("Server listening on %s" % port)
 
 
-func connect_and_create(display_name: String) -> void:
+func _make_ws_peer() -> WebSocketMultiplayerPeer:
+	var peer := WebSocketMultiplayerPeer.new()
+	peer.inbound_buffer_size = WS_BUFFER_BYTES
+	peer.outbound_buffer_size = WS_BUFFER_BYTES
+	return peer
+
+
+func connect_and_create(display_name: String, cosmetics: Dictionary = {}) -> void:
 	_display_name = display_name
+	_cosmetics = cosmetics
 	_pending_action = "create"
 	_connect_tries = 0
 	_ensure_connected()
 
 
-func connect_and_join(code: String, display_name: String) -> void:
+func connect_and_join(code: String, display_name: String, cosmetics: Dictionary = {}) -> void:
 	_display_name = display_name
+	_cosmetics = cosmetics
 	_pending_action = "join"
 	_pending_join_code = code
 	_connect_tries = 0
@@ -71,9 +101,9 @@ func _ensure_connected() -> void:
 	if _is_client_connected():
 		_finish_pending()
 		return
-	if _url_is_loopback() and _server_pid == -1 and _connect_tries == 0:
-		notice.emit("Starting a local server…")
-		_spawn_dedicated_server()
+	# Prefer an already-running server (run_server.bat). Only spawn if port is free.
+	if _url_is_loopback() and not _loopback_port_open(DEFAULT_PORT):
+		_maybe_spawn_local_server()
 		_connect_tries = 1
 		get_tree().create_timer(0.7).timeout.connect(_begin_client_connect, CONNECT_ONE_SHOT)
 		return
@@ -84,7 +114,7 @@ func _begin_client_connect() -> void:
 	_connect_tries += 1
 	if not _is_server:
 		multiplayer.multiplayer_peer = null
-	var peer := WebSocketMultiplayerPeer.new()
+	var peer := _make_ws_peer()
 	var err := peer.create_client(server_url)
 	if err != OK:
 		_on_connection_failed()
@@ -117,9 +147,8 @@ func _on_connected() -> void:
 func _on_connection_failed() -> void:
 	if _pending_action == "":
 		return
-	if _url_is_loopback() and _server_pid == -1:
-		notice.emit("Starting a local server…")
-		_spawn_dedicated_server()
+	# Never spawn on retry — that was creating dozens of headless Godots.
+	# Only retry connecting to whatever is (or should be) on the port.
 	if _connect_tries < 12:
 		_retrying = true
 		get_tree().create_timer(0.4).timeout.connect(_begin_client_connect, CONNECT_ONE_SHOT)
@@ -133,8 +162,41 @@ func _url_is_loopback() -> bool:
 	return "127.0.0.1" in url or "localhost" in url
 
 
+func _loopback_port_open(port: int) -> bool:
+	var tcp := StreamPeerTCP.new()
+	var err := tcp.connect_to_host("127.0.0.1", port)
+	if err != OK and err != ERR_BUSY:
+		return false
+	for _i in 30:
+		tcp.poll()
+		var status := tcp.get_status()
+		if status == StreamPeerTCP.STATUS_CONNECTED:
+			tcp.disconnect_from_host()
+			return true
+		if status == StreamPeerTCP.STATUS_ERROR:
+			tcp.disconnect_from_host()
+			return false
+		OS.delay_msec(10)
+	tcp.disconnect_from_host()
+	return false
+
+
+func _maybe_spawn_local_server() -> void:
+	if _spawn_attempted or _server_pid != -1:
+		return
+	if _loopback_port_open(DEFAULT_PORT):
+		notice.emit("Using existing server on %s" % DEFAULT_PORT)
+		return
+	_spawn_attempted = true
+	notice.emit("Starting a local server…")
+	_spawn_dedicated_server()
+
+
 func _spawn_dedicated_server() -> void:
 	if _server_pid != -1:
+		return
+	if _loopback_port_open(DEFAULT_PORT):
+		print("Port %s already in use — not spawning another server" % DEFAULT_PORT)
 		return
 	var exe := OS.get_executable_path()
 	var project := ProjectSettings.globalize_path("res://").rstrip("/").rstrip("\\")
@@ -145,13 +207,23 @@ func _spawn_dedicated_server() -> void:
 		"--",
 		"--server",
 		"--port",
-		"9080",
+		str(DEFAULT_PORT),
 	])
-	_server_pid = OS.create_process(exe, args, true)
+	_server_pid = OS.create_process(exe, args, false)
 	if _server_pid == -1:
 		push_error("Could not spawn dedicated server process")
+		_spawn_attempted = false
 	else:
 		print("Spawned dedicated server pid %s" % _server_pid)
+
+
+func _kill_spawned_server() -> void:
+	if _server_pid == -1:
+		return
+	# Only kill servers we spawned — never touch run_server.bat's process.
+	OS.kill(_server_pid)
+	print("Stopped spawned server pid %s" % _server_pid)
+	_server_pid = -1
 
 
 func _on_server_disconnected() -> void:
@@ -165,10 +237,35 @@ func _finish_pending() -> void:
 		connection_failed.emit("Not connected to a dedicated server. Try Create room again, or run run_server.bat.")
 		return
 	if _pending_action == "create":
-		rpc_id(1, "s_create_room", _display_name)
+		rpc_id(1, "s_create_room", _display_name, _cosmetics)
 	elif _pending_action == "join":
-		rpc_id(1, "s_join_room", _pending_join_code, _display_name)
+		rpc_id(1, "s_join_room", _pending_join_code, _display_name, _cosmetics)
+	# Reliable + ordered: the room exists by the time this arrives.
+	if _pending_action != "" and not _duck_png.is_empty():
+		rpc_id(1, "s_set_duck_drawing", _duck_png)
 	_pending_action = ""
+
+
+## Card back/front choice. Applies to the room while in the lobby (picker UI calls this).
+func set_cosmetics(cosmetics: Dictionary) -> void:
+	_cosmetics = cosmetics
+	if _is_client_connected() and room_code != "":
+		rpc_id(1, "s_set_cosmetics", cosmetics)
+
+
+## Duck drawing PNG. Sent now if in a room, and on every create/join after this.
+func set_duck_drawing(png: PackedByteArray) -> void:
+	_duck_png = png
+	if _is_client_connected() and room_code != "":
+		rpc_id(1, "s_set_duck_drawing", png)
+
+
+## Duck upgrade baked mid-match. `progress` (already saved locally) rides along on later joins.
+func apply_duck_upgrade(stamp_id: String, png: PackedByteArray, progress: Dictionary) -> void:
+	_duck_png = png
+	_cosmetics = _cosmetics.merged({"duck_progress": progress}, true)
+	if _is_client_connected() and room_code != "":
+		rpc_id(1, "s_apply_duck_upgrade", stamp_id, png)
 
 
 func start_match() -> void:
@@ -184,6 +281,24 @@ func submit_intent(intent: Dictionary) -> void:
 	rpc_id(1, "s_intent", intent)
 
 
+func send_reveal_progress(target_player_id: String, t: float) -> void:
+	if not _is_client_connected():
+		return
+	rpc_id(1, "s_reveal_progress", target_player_id, clampf(t, 0.0, 1.0))
+
+
+func send_reveal_cancel(target_player_id: String) -> void:
+	if not _is_client_connected():
+		return
+	rpc_id(1, "s_reveal_cancel", target_player_id)
+
+
+func send_discard_hover(slot: int) -> void:
+	if not _is_client_connected():
+		return
+	rpc_id(1, "s_discard_hover", slot)
+
+
 func leave_room() -> void:
 	if _is_client_connected():
 		rpc_id(1, "s_leave")
@@ -194,11 +309,11 @@ func leave_room() -> void:
 
 
 @rpc("any_peer", "reliable")
-func s_create_room(display_name: String) -> void:
+func s_create_room(display_name: String, cosmetics: Dictionary) -> void:
 	if not _is_server:
 		return
 	var peer := multiplayer.get_remote_sender_id()
-	var result: Dictionary = _logic.create_room(peer, display_name)
+	var result: Dictionary = _logic.create_room(peer, display_name, cosmetics)
 	if not result.ok:
 		rpc_id(peer, "c_error", result.get("error", "Create failed"))
 		return
@@ -206,13 +321,55 @@ func s_create_room(display_name: String) -> void:
 
 
 @rpc("any_peer", "reliable")
-func s_join_room(code: String, display_name: String) -> void:
+func s_join_room(code: String, display_name: String, cosmetics: Dictionary) -> void:
 	if not _is_server:
 		return
 	var peer := multiplayer.get_remote_sender_id()
-	var result: Dictionary = _logic.join_room(peer, code, display_name)
+	var result: Dictionary = _logic.join_room(peer, code, display_name, cosmetics)
 	if not result.ok:
 		rpc_id(peer, "c_error", result.get("error", "Join failed"))
+		return
+	_broadcast_lobby(String(result.code))
+	for art in _logic.duck_arts(String(result.code)):
+		rpc_id(peer, "c_duck_art", art.player_id, art.rev, art.png)
+
+
+@rpc("any_peer", "reliable")
+func s_set_duck_drawing(png: PackedByteArray) -> void:
+	if not _is_server:
+		return
+	var peer := multiplayer.get_remote_sender_id()
+	var result: Dictionary = _logic.set_duck_drawing(peer, png)
+	if not result.ok:
+		rpc_id(peer, "c_error", result.get("error", "Could not change your duck"))
+		return
+	for pid in _logic.rooms[result.code].peers.keys():
+		rpc_id(int(pid), "c_duck_art", result.player_id, result.rev, png)
+	_broadcast_lobby(String(result.code))
+
+
+@rpc("any_peer", "reliable")
+func s_apply_duck_upgrade(stamp_id: String, png: PackedByteArray) -> void:
+	if not _is_server:
+		return
+	var peer := multiplayer.get_remote_sender_id()
+	var result: Dictionary = _logic.apply_duck_upgrade(peer, stamp_id, png)
+	if not result.ok:
+		rpc_id(peer, "c_error", result.get("error", "Could not upgrade your duck"))
+		return
+	for pid in _logic.rooms[result.code].peers.keys():
+		rpc_id(int(pid), "c_duck_art", result.player_id, result.rev, png)
+	_broadcast_match(String(result.code), false)
+
+
+@rpc("any_peer", "reliable")
+func s_set_cosmetics(cosmetics: Dictionary) -> void:
+	if not _is_server:
+		return
+	var peer := multiplayer.get_remote_sender_id()
+	var result: Dictionary = _logic.set_cosmetics(peer, cosmetics)
+	if not result.ok:
+		rpc_id(peer, "c_error", result.get("error", "Could not change cards"))
 		return
 	_broadcast_lobby(String(result.code))
 
@@ -250,6 +407,43 @@ func s_leave() -> void:
 	_server_drop(multiplayer.get_remote_sender_id())
 
 
+@rpc("any_peer", "reliable")
+func s_reveal_progress(target_player_id: String, t: float) -> void:
+	if not _is_server:
+		return
+	var peer := multiplayer.get_remote_sender_id()
+	var result: Dictionary = _logic.validate_reveal_relay(peer, target_player_id)
+	if not result.ok:
+		return
+	var scrub_t := clampf(t, 0.0, 1.0)
+	for pid in result.peer_ids:
+		rpc_id(int(pid), "c_reveal_progress", target_player_id, scrub_t)
+
+
+@rpc("any_peer", "reliable")
+func s_reveal_cancel(target_player_id: String) -> void:
+	if not _is_server:
+		return
+	var peer := multiplayer.get_remote_sender_id()
+	var result: Dictionary = _logic.validate_reveal_relay(peer, target_player_id)
+	if not result.ok:
+		return
+	for pid in result.peer_ids:
+		rpc_id(int(pid), "c_reveal_cancel", target_player_id)
+
+
+@rpc("any_peer", "reliable")
+func s_discard_hover(slot: int) -> void:
+	if not _is_server:
+		return
+	var peer := multiplayer.get_remote_sender_id()
+	var result: Dictionary = _logic.validate_discard_hover_relay(peer, slot)
+	if not result.ok:
+		return
+	for pid in result.peer_ids:
+		rpc_id(int(pid), "c_discard_hover", slot)
+
+
 @rpc("authority", "reliable")
 func c_lobby(code: String, players: Array, your_player_id: String, host: bool) -> void:
 	room_code = code
@@ -267,8 +461,18 @@ func c_match(snapshot: Dictionary, just_started: bool) -> void:
 
 
 @rpc("authority", "reliable")
+func c_duck_art(art_player_id: String, rev: int, png: PackedByteArray) -> void:
+	var img := DuckDrawing.decode(png)
+	if img == null:
+		return
+	CardArt.set_duck_image(art_player_id, rev, img)
+	duck_art_updated.emit(art_player_id)
+
+
+@rpc("authority", "reliable")
 func c_error(msg: String) -> void:
-	notice.emit(msg)
+	notice.emit(str(msg))
+	print("Net error: ", msg)
 
 
 @rpc("authority", "reliable")
@@ -276,6 +480,21 @@ func c_kicked(msg: String) -> void:
 	room_code = ""
 	last_snapshot = {}
 	connection_failed.emit(msg)
+
+
+@rpc("authority", "reliable")
+func c_reveal_progress(target_player_id: String, t: float) -> void:
+	reveal_progress.emit(target_player_id, clampf(t, 0.0, 1.0))
+
+
+@rpc("authority", "reliable")
+func c_reveal_cancel(target_player_id: String) -> void:
+	reveal_cancel.emit(target_player_id)
+
+
+@rpc("authority", "reliable")
+func c_discard_hover(slot: int) -> void:
+	discard_hover.emit(slot)
 
 
 func _broadcast_lobby(code: String) -> void:

@@ -1,6 +1,14 @@
 extends Control
 
 const GameTypes = preload("res://scripts/rules/types.gd")
+const PlayerCosmetics = preload("res://scripts/ui/player_cosmetics.gd")
+const CardArt = preload("res://scripts/ui/card_art.gd")
+const DuckDrawing = preload("res://scripts/ui/duck_drawing.gd")
+const CardPickerScript = preload("res://scripts/ui/card_picker.gd")
+const DuckEditorScript = preload("res://scripts/ui/duck_editor.gd")
+
+const THUMB_BACK := Vector2(24, 32)
+const THUMB_DUCK := Vector2(29, 35)
 
 var _name_edit: LineEdit
 var _url_edit: LineEdit
@@ -10,15 +18,30 @@ var _lobby_panel: Panel
 var _code_label: Label
 var _player_list: VBoxContainer
 var _start_btn: Button
+var _preview_back: TextureRect
+var _preview_safe: TextureRect
+var _preview_duck: TextureRect
+var _picker
+var _editor
+
+var _cosmetics: Dictionary = {}
+var _duck_img: Image = null
+var _last_players: Array = []
 
 
 func _ready() -> void:
 	set_anchors_preset(PRESET_FULL_RECT)
+	_cosmetics = PlayerCosmetics.load_local()
+	_duck_img = DuckDrawing.load_local()
 	_build()
+	_refresh_preview()
+	if _duck_img != null:
+		Net.set_duck_drawing(DuckDrawing.encode(_duck_img))
 	Net.lobby_updated.connect(_on_lobby)
 	Net.match_started.connect(_on_match_started)
 	Net.connection_failed.connect(_on_fail)
 	Net.notice.connect(func(msg): _status.text = msg)
+	Net.duck_art_updated.connect(func(_pid): _rebuild_player_rows())
 	if Net.room_code != "":
 		_show_lobby(true)
 
@@ -46,18 +69,21 @@ func _build() -> void:
 	add_child(sub)
 
 	var form := VBoxContainer.new()
-	form.position = Vector2(420, 170)
-	form.size = Vector2(440, 420)
+	form.position = Vector2(60, 170)
+	form.size = Vector2(400, 420)
 	form.add_theme_constant_override("separation", 10)
 	add_child(form)
 
-	form.add_child(_labeled("Your name", true))
+	form.add_child(_labeled("Your name"))
 	_name_edit = LineEdit.new()
-	_name_edit.text = "Mallard"
+	_name_edit.text = PlayerCosmetics.load_name()
+	_name_edit.max_length = PlayerCosmetics.MAX_NAME_LEN
 	_name_edit.custom_minimum_size = Vector2(0, 36)
+	_name_edit.text_submitted.connect(func(t): PlayerCosmetics.save_name(t))
+	_name_edit.focus_exited.connect(func(): PlayerCosmetics.save_name(_name_edit.text))
 	form.add_child(_name_edit)
 
-	form.add_child(_labeled("Server URL", false))
+	form.add_child(_labeled("Server URL"))
 	_url_edit = LineEdit.new()
 	_url_edit.text = Net.server_url
 	_url_edit.custom_minimum_size = Vector2(0, 36)
@@ -75,6 +101,7 @@ func _build() -> void:
 	_code_edit = LineEdit.new()
 	_code_edit.placeholder_text = "Room code"
 	_code_edit.custom_minimum_size = Vector2(220, 40)
+	_code_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	join_row.add_child(_code_edit)
 	var join := Button.new()
 	join.text = "Join"
@@ -85,6 +112,8 @@ func _build() -> void:
 	_status = Label.new()
 	_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	form.add_child(_status)
+
+	_build_cards_panel()
 
 	_lobby_panel = Panel.new()
 	_lobby_panel.position = Vector2(900, 170)
@@ -108,6 +137,7 @@ func _build() -> void:
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	lp.add_child(hint)
 	_player_list = VBoxContainer.new()
+	_player_list.add_theme_constant_override("separation", 6)
 	lp.add_child(_player_list)
 	_start_btn = Button.new()
 	_start_btn.text = "Start game"
@@ -118,30 +148,120 @@ func _build() -> void:
 	leave.pressed.connect(func(): Net.leave_room(); _show_lobby(false))
 	lp.add_child(leave)
 
+	_picker = CardPickerScript.new()
+	add_child(_picker)
+	_picker.picked.connect(_on_card_picked)
+	_editor = DuckEditorScript.new()
+	add_child(_editor)
+	_editor.finished.connect(_on_duck_finished)
 
-func _labeled(text: String, _big: bool) -> Label:
+
+func _build_cards_panel() -> void:
+	var panel := Panel.new()
+	panel.position = Vector2(500, 170)
+	panel.size = Vector2(360, 300)
+	add_child(panel)
+	var box := VBoxContainer.new()
+	box.set_anchors_preset(PRESET_FULL_RECT)
+	box.offset_left = 20
+	box.offset_top = 14
+	box.offset_right = -20
+	box.offset_bottom = -14
+	box.add_theme_constant_override("separation", 8)
+	panel.add_child(box)
+	box.add_child(_labeled("Your cards"))
+
+	var cards := HBoxContainer.new()
+	cards.add_theme_constant_override("separation", 16)
+	box.add_child(cards)
+	_preview_back = _preview_slot(cards, "Back")
+	_preview_safe = _preview_slot(cards, "Safe")
+	_preview_duck = _preview_slot(cards, "Duck")
+
+	var buttons := HBoxContainer.new()
+	buttons.add_theme_constant_override("separation", 8)
+	box.add_child(buttons)
+	for spec in [["Card back", _open_picker.bind("back")], ["Card front", _open_picker.bind("front")], ["Draw duck", _open_editor]]:
+		var b := Button.new()
+		b.text = spec[0]
+		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		b.custom_minimum_size = Vector2(0, 38)
+		b.pressed.connect(spec[1])
+		buttons.add_child(b)
+
+
+func _preview_slot(parent: Control, caption: String) -> TextureRect:
+	var col := VBoxContainer.new()
+	parent.add_child(col)
+	var tex := TextureRect.new()
+	tex.custom_minimum_size = Vector2(CardArt.CARD_SIZE)
+	tex.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	col.add_child(tex)
+	var l := Label.new()
+	l.text = caption
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	col.add_child(l)
+	return tex
+
+
+func _labeled(text: String) -> Label:
 	var l := Label.new()
 	l.text = text
 	return l
 
 
+func _refresh_preview() -> void:
+	CardArt.set_local_preview(_cosmetics, _duck_img)
+	_preview_back.texture = CardArt.back_texture(CardArt.LOCAL_ID)
+	_preview_safe.texture = CardArt.face_texture(CardArt.LOCAL_ID, false)
+	_preview_duck.texture = CardArt.face_texture(CardArt.LOCAL_ID, true)
+
+
+func _open_picker(kind: String) -> void:
+	_picker.open(kind, String(_cosmetics.card_back_id if kind == "back" else _cosmetics.card_front_id))
+
+
+func _on_card_picked(kind: String, id: String) -> void:
+	if kind == "back":
+		_cosmetics.card_back_id = id
+	else:
+		_cosmetics.card_front_id = id
+	PlayerCosmetics.save_local(_cosmetics)
+	Net.set_cosmetics(_cosmetics)
+	_refresh_preview()
+
+
+func _open_editor() -> void:
+	_editor.open(_duck_img, String(_cosmetics.card_front_id))
+
+
+func _on_duck_finished(img: Image) -> void:
+	_duck_img = img
+	DuckDrawing.save_local(img)
+	# A redrawn duck starts over: no stamps earned, no destroy powers.
+	PlayerCosmetics.save_progress({})
+	_cosmetics.duck_progress = PlayerCosmetics.load_progress()
+	Net.set_cosmetics(_cosmetics)
+	_refresh_preview()
+	Net.set_duck_drawing(DuckDrawing.encode(img))
+
+
 func _display_name() -> String:
-	var n := _name_edit.text.strip_edges()
-	if n == "":
-		return "Mallard"
+	var n := PlayerCosmetics.clean_name(_name_edit.text)
+	PlayerCosmetics.save_name(n)
 	return n
 
 
 func _create_room() -> void:
 	_status.text = "Connecting…"
 	Net.server_url = _url_edit.text.strip_edges()
-	Net.connect_and_create(_display_name())
+	Net.connect_and_create(_display_name(), _cosmetics)
 
 
 func _join_room() -> void:
 	_status.text = "Connecting…"
 	Net.server_url = _url_edit.text.strip_edges()
-	Net.connect_and_join(_code_edit.text.strip_edges().to_upper(), _display_name())
+	Net.connect_and_join(_code_edit.text.strip_edges().to_upper(), _display_name(), _cosmetics)
 
 
 func _on_lobby(code: String, players: Array, is_host: bool) -> void:
@@ -149,18 +269,40 @@ func _on_lobby(code: String, players: Array, is_host: bool) -> void:
 	_start_btn.visible = is_host
 	_start_btn.disabled = players.size() < GameTypes.MIN_PLAYERS or players.size() > GameTypes.MAX_PLAYERS
 	_start_btn.text = "Start game (%s)" % players.size()
+	_last_players = players
+	_rebuild_player_rows()
+	_show_lobby(true)
+	_status.text = "In room %s" % code
+
+
+func _rebuild_player_rows() -> void:
 	for c in _player_list.get_children():
 		if c.is_queued_for_deletion():
 			continue
 		_player_list.remove_child(c)
 		c.queue_free()
-	for p in players:
+	for p in _last_players:
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 8)
+		_player_list.add_child(row)
+		row.add_child(_thumb(CardArt.back_texture_by_id(String(p.get("card_back_id", ""))), THUMB_BACK))
+		var duck: Image = CardArt.duck_image_of(String(p.get("player_id", "")))
+		if duck == null:
+			duck = DuckDrawing.default_image()
+		row.add_child(_thumb(ImageTexture.create_from_image(duck), THUMB_DUCK))
 		var l := Label.new()
-		var extra := " (host)" if p.get("host", false) else ""
-		l.text = "• %s%s" % [p.name, extra]
-		_player_list.add_child(l)
-	_show_lobby(true)
-	_status.text = "In room %s" % code
+		l.text = "%s%s" % [p.name, " (host)" if p.get("host", false) else ""]
+		l.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		row.add_child(l)
+
+
+func _thumb(tex: Texture2D, size_px: Vector2) -> TextureRect:
+	var t := TextureRect.new()
+	t.texture = tex
+	t.custom_minimum_size = size_px
+	t.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	t.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	return t
 
 
 func _on_match_started() -> void:
