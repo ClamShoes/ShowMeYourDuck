@@ -54,6 +54,8 @@ func _init() -> void:
 	_run("server_rejects_unknown_code", test_server_rejects_unknown_code)
 	_run("server_start_requires_host_allows_one", test_server_start_requires_host_allows_one)
 	_run("server_min_players_flag", test_server_min_players_flag)
+	_run("server_return_to_lobby", test_server_return_to_lobby)
+	_run("server_set_display_name", test_server_set_display_name)
 	_run("server_reveal_relay_requires_challenger", test_server_reveal_relay_requires_challenger)
 	_run("server_sanitizes_cosmetics", test_server_sanitizes_cosmetics)
 	_run("snapshot_carries_cosmetics", test_snapshot_carries_cosmetics)
@@ -1042,6 +1044,52 @@ func test_server_min_players_flag() -> String:
 	return ""
 
 
+func test_server_return_to_lobby() -> String:
+	var srv = DuckServerScript.new()
+	var created: Dictionary = srv.create_room(2, "A")
+	var code := String(created.code)
+	srv.join_room(3, code, "B")
+	if srv.return_to_lobby(2).ok:
+		return "no match yet, nothing to return from"
+	srv.start_match(2)
+	if srv.return_to_lobby(2).ok:
+		return "must not return before GAME_OVER"
+	var gs = srv.rooms[code].state
+	gs.phase = GameTypes.Phase.GAME_OVER
+	if srv.return_to_lobby(3).ok:
+		return "only the host may return the room to its lobby"
+	var r: Dictionary = srv.return_to_lobby(2)
+	if not r.ok or String(r.code) != code:
+		return "host should return to the lobby: %s" % r
+	if srv.rooms[code].state != null or bool(srv.lobby_snapshot(code).in_match):
+		return "room should be back in its lobby"
+	if srv.rooms[code].peers.size() != 2:
+		return "everyone stays in the room"
+	if not srv.join_room(4, code, "C").ok:
+		return "new players can join between games"
+	if not srv.start_match(2).ok:
+		return "a new match should start from the lobby"
+	return ""
+
+
+func test_server_set_display_name() -> String:
+	var srv = DuckServerScript.new()
+	var created: Dictionary = srv.create_room(2, "A")
+	var code := String(created.code)
+	if srv.set_display_name(9, "X").ok:
+		return "peer not in a room can't rename"
+	var r: Dictionary = srv.set_display_name(2, "  Quackers  ")
+	if not r.ok or String(r.code) != code:
+		return "rename in the lobby should work: %s" % r
+	var name := String(srv.lobby_snapshot(code).players[0].name)
+	if name != "Quackers":
+		return "name should be cleaned and shown in the lobby, got '%s'" % name
+	srv.start_match(2)
+	if srv.set_display_name(2, "Mid").ok:
+		return "rename must be rejected during a match"
+	return ""
+
+
 func test_server_start_requires_host_allows_one() -> String:
 	var srv = DuckServerScript.new()
 	var created: Dictionary = srv.create_room(2, "A")
@@ -1405,4 +1453,10 @@ func test_status_text_is_per_viewer() -> String:
 	snap.you_are_host = true
 	if not StatusTextScript.for_viewer(snap, "p1").contains("press Next round"):
 		return "host should be told to press Next round"
+	snap.phase = GameTypes.Phase.GAME_OVER
+	if StatusTextScript.for_viewer(snap, "p1") != "Game over — press Back to lobby when ready.":
+		return "host should be told to press Back to lobby: %s" % StatusTextScript.for_viewer(snap, "p1")
+	snap.you_are_host = false
+	if StatusTextScript.for_viewer(snap, "p1") != "Game over — waiting for P0 to return to the lobby.":
+		return "non-host should wait for the host to return: %s" % StatusTextScript.for_viewer(snap, "p1")
 	return ""

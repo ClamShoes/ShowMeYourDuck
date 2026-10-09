@@ -94,7 +94,13 @@ func _ready() -> void:
 		Net.reveal_cancel.connect(_on_remote_reveal_cancel)
 	if not Net.discard_hover.is_connected(_on_remote_discard_hover):
 		Net.discard_hover.connect(_on_remote_discard_hover)
+	# Mid-match the server only sends a lobby update when the room has gone back to its lobby.
+	Net.lobby_updated.connect(_on_back_to_lobby)
 	_queue_render()
+
+
+func _on_back_to_lobby(_code: String, _players: Array, _is_host: bool, _min_players: int) -> void:
+	get_tree().change_scene_to_file("res://scenes/lobby.tscn")
 
 
 func _on_net_notice(msg: String) -> void:
@@ -678,15 +684,8 @@ func _layout_hand(snap: Dictionary) -> void:
 		_local_hand_order.clear()
 		_clear_hand_spacer()
 		return
-	var phase := int(snap.phase)
-	var viewer := _viewer_id()
-	var can_play := false
-	if phase == GameTypes.Phase.PLACE_INITIAL:
-		var me := _player_info(snap, viewer)
-		can_play = not bool(me.get("placed_initial", false))
-	elif phase == GameTypes.Phase.PLACE_OR_BID:
-		can_play = String(snap.current_player_id) == viewer
-	var can_discard := phase == GameTypes.Phase.CHOOSE_DISCARD and String(snap.challenger_id) == viewer and int(snap.get("discard_slots", 0)) == 0
+	# Cards can always be picked up and shuffled; only a tap-to-discard turns dragging off.
+	var can_discard := _can_discard(snap, _viewer_id())
 
 	var wanted: Dictionary = {}
 	for card in snap.you.hand:
@@ -760,7 +759,7 @@ func _layout_hand(snap: Dictionary) -> void:
 				view.modulate.a = 0.0
 				view.mouse_filter = Control.MOUSE_FILTER_IGNORE
 				view.set_meta("awaiting_flight", true)
-		view.setup(cid, bool(card.is_duck), true, can_play or can_discard, can_play, String(card.get("owner_id", _viewer_id())))
+		view.setup(cid, bool(card.is_duck), true, true, not can_discard, String(card.get("owner_id", _viewer_id())))
 		view.remember_rest_position()
 		if _flight_pending.has(cid):
 			view.modulate.a = 0.0
@@ -901,7 +900,8 @@ func _update_next_round_btn(snap: Dictionary) -> void:
 		var phase := int(snap.get("phase", -1))
 		if phase >= 0 and phase < GameTypes.Phase.size():
 			phase_name = String(GameTypes.Phase.keys()[phase])
-	var show := phase_name == "ROUND_OVER" and not _holding_result(snap) and bool(snap.get("you_are_host", true))
+	var game_over := phase_name == "GAME_OVER"
+	var show := (phase_name == "ROUND_OVER" or game_over) and not _holding_result(snap) and bool(snap.get("you_are_host", true))
 	_next_round_btn.visible = show
 	if not show:
 		return
@@ -915,14 +915,18 @@ func _update_next_round_btn(snap: Dictionary) -> void:
 	_next_round_btn.position = Vector2((vp.x - 280.0) * 0.5, y)
 	_next_round_btn.disabled = false
 	_next_round_btn.mouse_filter = Control.MOUSE_FILTER_STOP
-	_next_round_btn.text = "Next round"
-	_next_round_btn.tooltip_text = "Start the next hand"
+	_next_round_btn.text = "Back to lobby" if game_over else "Next round"
+	_next_round_btn.tooltip_text = "Take everyone back to this room's lobby" if game_over else "Start the next hand"
 
 
 func _on_next_round_pressed() -> void:
 	var snap := _snapshot()
 	if snap.has("you_are_host"):
 		Net.is_host = bool(snap.you_are_host)
+	if String(snap.get("phase_name", "")) == "GAME_OVER" or int(snap.get("phase", -1)) == GameTypes.Phase.GAME_OVER:
+		_error.text = "Returning to the lobby…"
+		Net.return_to_lobby()
+		return
 	_error.text = "Starting next round…"
 	_submit(GameProtocol.next_round())
 
@@ -939,9 +943,23 @@ func _on_bid_pressed() -> void:
 		_submit(GameProtocol.raise_bid(_bid_amount))
 
 
+func _can_play(snap: Dictionary, viewer: String) -> bool:
+	match int(snap.get("phase", -1)):
+		GameTypes.Phase.PLACE_INITIAL:
+			return not bool(_player_info(snap, viewer).get("placed_initial", false))
+		GameTypes.Phase.PLACE_OR_BID:
+			return String(snap.current_player_id) == viewer
+	return false
+
+
+## Own Duck with cards in hand: the challenger taps one to lose it.
+func _can_discard(snap: Dictionary, viewer: String) -> bool:
+	return int(snap.get("phase", -1)) == GameTypes.Phase.CHOOSE_DISCARD and String(snap.challenger_id) == viewer \
+			and int(snap.get("discard_slots", 0)) == 0
+
+
 func _on_card_pressed(card) -> void:
-	var snap := _snapshot()
-	if int(snap.phase) == GameTypes.Phase.CHOOSE_DISCARD:
+	if _can_discard(_snapshot(), _viewer_id()):
 		_submit(GameProtocol.choose_discard(card.card_id))
 
 
@@ -954,14 +972,9 @@ func _on_card_dropped(card, at: Vector2) -> void:
 	_dragging_card = null
 	_last_reorder_idx = -1
 
-	if int(snap.phase) == GameTypes.Phase.CHOOSE_DISCARD:
-		card.return_to_hand(insert_at)
-		_sync_local_order_from_hand()
-		_force_idle_hand()
-		return
 	var viewer := _viewer_id()
 	var mat = _mats.get(viewer)
-	if mat and mat.contains_point(at):
+	if mat and mat.contains_point(at) and _can_play(snap, viewer):
 		_submit(GameProtocol.place_card(card.card_id))
 		# Keep alive across snapshot hand layout (drag_layer used to free this card).
 		_placing_card = card

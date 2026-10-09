@@ -23,6 +23,9 @@ var room_code := ""
 var player_id := ""
 var is_host := false
 var last_snapshot: Dictionary = {}
+## Last lobby broadcast, replayed when the lobby scene opens after a match.
+var lobby_players: Array = []
+var min_players := 1
 var _display_name := "Mallard"
 var _cosmetics: Dictionary = {}
 var _duck_png := PackedByteArray()
@@ -51,10 +54,10 @@ func _notification(what: int) -> void:
 		_kill_spawned_server()
 
 
-func start_server(port: int, min_players: int = 1) -> void:
+func start_server(port: int, min_count: int = 1) -> void:
 	_is_server = true
 	_logic = DuckServerScript.new()
-	_logic.min_players = min_players
+	_logic.min_players = min_count
 	var peer := _make_ws_peer()
 	var err := peer.create_server(port, "*")
 	if err != OK:
@@ -66,7 +69,7 @@ func start_server(port: int, min_players: int = 1) -> void:
 	multiplayer.multiplayer_peer = peer
 	if not multiplayer.peer_disconnected.is_connected(_on_peer_disconnected):
 		multiplayer.peer_disconnected.connect(_on_peer_disconnected)
-	print("Show me your duck server on port %s (min %s players)" % [port, min_players])
+	print("Show me your duck server on port %s (min %s players)" % [port, min_count])
 	print("Clients should connect to ws://127.0.0.1:%s" % port)
 	notice.emit("Server listening on %s" % port)
 
@@ -278,11 +281,23 @@ func apply_duck_upgrade(stamp_id: String, png: PackedByteArray, progress: Dictio
 		rpc_id(1, "s_apply_duck_upgrade", stamp_id, png)
 
 
+## Used on every later create/join, and applied to the room now if in one (lobby only).
+func set_display_name(display_name: String) -> void:
+	_display_name = display_name
+	if _is_client_connected() and room_code != "":
+		rpc_id(1, "s_set_display_name", display_name)
+
+
 func start_match() -> void:
 	if not _is_client_connected():
 		connection_failed.emit("Not connected to a server.")
 		return
 	rpc_id(1, "s_start_match")
+
+
+func return_to_lobby() -> void:
+	if _is_client_connected():
+		rpc_id(1, "s_return_to_lobby")
 
 
 func submit_intent(intent: Dictionary) -> void:
@@ -316,6 +331,7 @@ func leave_room() -> void:
 	player_id = ""
 	is_host = false
 	last_snapshot = {}
+	lobby_players = []
 
 
 @rpc("any_peer", "reliable")
@@ -380,6 +396,30 @@ func s_set_cosmetics(cosmetics: Dictionary) -> void:
 	var result: Dictionary = _logic.set_cosmetics(peer, cosmetics)
 	if not result.ok:
 		rpc_id(peer, "c_error", result.get("error", "Could not change cards"))
+		return
+	_broadcast_lobby(String(result.code))
+
+
+@rpc("any_peer", "reliable")
+func s_set_display_name(display_name: String) -> void:
+	if not _is_server:
+		return
+	var peer := multiplayer.get_remote_sender_id()
+	var result: Dictionary = _logic.set_display_name(peer, display_name)
+	if not result.ok:
+		rpc_id(peer, "c_error", result.get("error", "Could not change your name"))
+		return
+	_broadcast_lobby(String(result.code))
+
+
+@rpc("any_peer", "reliable")
+func s_return_to_lobby() -> void:
+	if not _is_server:
+		return
+	var peer := multiplayer.get_remote_sender_id()
+	var result: Dictionary = _logic.return_to_lobby(peer)
+	if not result.ok:
+		rpc_id(peer, "c_error", result.get("error", "Could not return to the lobby"))
 		return
 	_broadcast_lobby(String(result.code))
 
@@ -455,11 +495,14 @@ func s_discard_hover(slot: int) -> void:
 
 
 @rpc("authority", "reliable")
-func c_lobby(code: String, players: Array, your_player_id: String, host: bool, min_players: int) -> void:
+func c_lobby(code: String, players: Array, your_player_id: String, host: bool, room_min_players: int) -> void:
 	room_code = code
 	player_id = your_player_id
 	is_host = host
-	lobby_updated.emit(code, players, host, min_players)
+	lobby_players = players
+	min_players = room_min_players
+	last_snapshot = {}
+	lobby_updated.emit(code, players, host, room_min_players)
 
 
 @rpc("authority", "reliable")

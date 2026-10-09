@@ -29,6 +29,7 @@ var _editor
 var _cosmetics: Dictionary = {}
 var _duck_img: Image = null
 var _last_players: Array = []
+var _sent_name := ""
 
 
 func _ready() -> void:
@@ -45,7 +46,7 @@ func _ready() -> void:
 	Net.notice.connect(func(msg): _status.text = msg)
 	Net.duck_art_updated.connect(func(_pid): _rebuild_player_rows())
 	if Net.room_code != "":
-		_show_lobby(true)
+		_on_lobby(Net.room_code, Net.lobby_players, Net.is_host, Net.min_players)
 
 
 func _build() -> void:
@@ -79,10 +80,11 @@ func _build() -> void:
 	form.add_child(_labeled("Your name"))
 	_name_edit = LineEdit.new()
 	_name_edit.text = PlayerCosmetics.load_name()
+	_sent_name = PlayerCosmetics.clean_name(_name_edit.text)
 	_name_edit.max_length = PlayerCosmetics.MAX_NAME_LEN
 	_name_edit.custom_minimum_size = Vector2(0, 36)
-	_name_edit.text_submitted.connect(func(t): PlayerCosmetics.save_name(t))
-	_name_edit.focus_exited.connect(func(): PlayerCosmetics.save_name(_name_edit.text))
+	_name_edit.text_submitted.connect(func(_t): _commit_name())
+	_name_edit.focus_exited.connect(_commit_name)
 	form.add_child(_name_edit)
 
 	var create := Button.new()
@@ -261,6 +263,15 @@ func _display_name() -> String:
 	var n := PlayerCosmetics.clean_name(_name_edit.text)
 	PlayerCosmetics.save_name(n)
 	return n
+
+
+## Saves the name and, when in a room, renames you there for everyone.
+func _commit_name() -> void:
+	var n := _display_name()
+	if n == _sent_name:
+		return
+	_sent_name = n
+	Net.set_display_name(n)
 
 
 func _create_room() -> void:

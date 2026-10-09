@@ -62,7 +62,9 @@ static func for_viewer(snap: Dictionary, viewer: String) -> String:
 				return "Round over — press Next round when ready."
 			return "Round over — waiting for %s to start the next round." % _name(snap, String(snap.get("host_id", "")), "the host")
 		GameTypes.Phase.GAME_OVER:
-			return "Game over."
+			if bool(snap.get("you_are_host", true)):
+				return "Game over — press Back to lobby when ready."
+			return "Game over — waiting for %s to return to the lobby." % _name(snap, String(snap.get("host_id", "")), "the host")
 	return "Show me your duck"
 
 

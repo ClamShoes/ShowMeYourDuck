@@ -125,6 +125,30 @@ func apply_intent(peer_id: int, intent: Dictionary) -> Dictionary:
 	return room.state.apply_intent(player_id, intent)
 
 
+## Game over: the room goes back to its lobby (same peers, same code) ready for a new match.
+func return_to_lobby(peer_id: int) -> Dictionary:
+	var room := _room_of(peer_id)
+	if room.is_empty() or room.state == null:
+		return {"ok": false, "error": "No match"}
+	if int(room.state.phase) != GameTypes.Phase.GAME_OVER:
+		return {"ok": false, "error": "The game isn't over yet"}
+	if room.peers.size() > 1 and peer_id != room.host_peer:
+		return {"ok": false, "error": "Only the host can return to the lobby"}
+	room.state = null
+	return {"ok": true, "code": String(room.code)}
+
+
+## Lobby only — a match keeps the names it started with.
+func set_display_name(peer_id: int, display_name: String) -> Dictionary:
+	var room := _room_of(peer_id)
+	if room.is_empty():
+		return {"ok": false, "error": "Not in a room"}
+	if room.state != null:
+		return {"ok": false, "error": "Can't change your name during a match"}
+	room.peers[peer_id].name = PlayerCosmetics.clean_name(display_name)
+	return {"ok": true, "code": String(room.code)}
+
+
 ## Mid-match duck upgrade: the client baked `stamp_id` into its duck; keep the art and progress
 ## on the peer so the next match starts from them.
 func apply_duck_upgrade(peer_id: int, stamp_id: String, png: PackedByteArray) -> Dictionary:
