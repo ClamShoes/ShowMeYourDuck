@@ -45,6 +45,10 @@ static func for_viewer(snap: Dictionary, viewer: String) -> String:
 		GameTypes.Phase.CHOOSE_DISCARD:
 			if int(snap.get("discard_slots", 0)) > 0:
 				var chooser := String(snap.get("discard_chooser_id", ""))
+				if chooser == challenger:
+					if challenger == viewer:
+						return "You hit your own Duck. Pick one of your cards to lose."
+					return "%s hit their own Duck and is choosing a card to lose…" % _name(snap, challenger)
 				if chooser == viewer:
 					return "Pick one of %s's cards to destroy." % _name(snap, challenger)
 				if challenger == viewer:

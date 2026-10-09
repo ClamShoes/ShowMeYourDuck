@@ -31,6 +31,8 @@ func _init() -> void:
 	_run("must_flip_own_stack_first", test_must_flip_own_stack_first)
 	_run("own_duck_lets_challenger_choose_discard", test_own_duck_lets_challenger_choose_discard)
 	_run("other_duck_owner_picks_discard", test_other_duck_owner_picks_discard)
+	_run("flipped_cards_keep_challenger_in", test_flipped_cards_keep_challenger_in)
+	_run("own_duck_all_flipped_uses_pick_row", test_own_duck_all_flipped_uses_pick_row)
 	_run("discard_pick_snapshot_secrecy", test_discard_pick_snapshot_secrecy)
 	_run("server_discard_hover_relay_requires_chooser", test_server_discard_hover_relay_requires_chooser)
 	_run("discard_event_public_hides_card", test_discard_event_public_hides_card)
@@ -754,7 +756,7 @@ func test_other_duck_owner_picks_discard() -> String:
 	r = gs.flip_stack("p0", "p0")
 	if not r.ok:
 		return r.error
-	# Revealed safes stay in flip_history until Next round; only live hand is discardable.
+	# p0's two flipped Safes stay face-up in flip_history but can still be picked.
 	r = gs.flip_stack("p0", "p1")
 	if not r.ok:
 		return r.error
@@ -762,18 +764,21 @@ func test_other_duck_owner_picks_discard() -> String:
 		return "p1 (the Duck's owner) should be choosing, got phase %s chooser %s" % [gs.phase, gs.discard_chooser_id]
 	if gs.current_player_id != "p1":
 		return "the chooser should be the current player"
-	var hand_before_duck: int = gs.players["p0"].hand.size()
-	if int(gs.public_snapshot().discard_slots) != hand_before_duck:
-		return "one slot per card in p0's hand"
-	if gs.discard_order.duplicate().all(func(c): return c in gs.players["p0"].hand) == false:
-		return "slots must be p0's hand cards"
+	var owned: Array = gs.players["p0"].hand.duplicate()
+	for e in gs.flip_history:
+		if String(e.owner_id) == "p0":
+			owned.append(String(e.card_id))
+	if int(gs.public_snapshot().discard_slots) != owned.size() or owned.size() != gs.players["p0"].hand.size() + 2:
+		return "one slot per p0 card, hand plus its 2 flipped Safes"
+	if gs.discard_order.duplicate().all(func(c): return c in owned) == false:
+		return "slots must be p0's cards"
 	if gs.pick_discard("p0", 0).ok or gs.pick_discard("p2", 0).ok:
 		return "only the Duck's owner may pick"
 	if gs.choose_discard("p0", String(gs.players["p0"].hand[0])).ok:
 		return "challenger must not choose their own discard after another player's Duck"
-	if gs.pick_discard("p1", hand_before_duck).ok:
+	if gs.pick_discard("p1", owned.size()).ok:
 		return "out-of-range slot must fail"
-	var k := hand_before_duck - 1
+	var k := owned.size() - 1
 	var want := String(gs.discard_order[k])
 	r = gs.pick_discard("p1", k)
 	if not r.ok:
@@ -782,10 +787,6 @@ func test_other_duck_owner_picks_discard() -> String:
 		return "picked slot's card should be destroyed"
 	if int(gs.last_discard.slot) != k or int(gs.public_snapshot().last_discard.slot) != k:
 		return "last_discard should carry the picked slot"
-	if gs.players["p0"].hand.size() != hand_before_duck - 1:
-		return "p0 should lose 1 from live hand after other duck, got %s (was %s)" % [
-			gs.players["p0"].hand.size(), hand_before_duck
-		]
 	if gs.flip_history.is_empty():
 		return "flip_history should remain until Next round"
 	if gs.phase != GameTypes.Phase.ROUND_OVER:
@@ -799,6 +800,88 @@ func test_other_duck_owner_picks_discard() -> String:
 		return "challenger still starts next hand after Next round"
 	if not gs.flip_history.is_empty():
 		return "flip_history should clear on Next round"
+	if gs.players["p0"].hand.size() != owned.size() - 1 or want in gs.players["p0"].hand:
+		return "p0 should get back every card but the destroyed one, got %s" % [gs.players["p0"].hand]
+	return ""
+
+
+## The reported bug: p0 plays both Safes, keeps only its Duck in hand, flips its Safes then p1's
+## Duck. Losing the Duck must not knock p0 out while its flipped Safes remain.
+func test_flipped_cards_keep_challenger_in() -> String:
+	var gs := _game(3, 7)
+	var p0: Dictionary = gs.players["p0"]
+	p0.hand.erase(_card_of(gs, "p0", false))
+	var err := _place_all_initial_safe(gs)
+	if err != "":
+		return err
+	for step in [["p0", _card_of(gs, "p0", false)], ["p1", _card_of(gs, "p1", true)], ["p2", String(gs.players["p2"].hand[0])]]:
+		var r: Dictionary = gs.place_card(step[0], step[1])
+		if not r.ok:
+			return r.error
+	if p0.hand != [_card_of(gs, "p0", true)]:
+		return "setup: p0 should hold only its Duck, got %s" % [p0.hand]
+	gs.open_bid("p0", 3)
+	err = _everyone_pass_except_bidder(gs)
+	if err != "":
+		return err
+	for target in ["p0", "p0", "p1"]:
+		var r: Dictionary = gs.flip_stack("p0", target)
+		if not r.ok:
+			return r.error
+	if gs.phase != GameTypes.Phase.CHOOSE_DISCARD or int(gs.public_snapshot().discard_slots) != 3:
+		return "p1 should pick from p0's Duck and 2 flipped Safes, got %s slots" % gs.public_snapshot().discard_slots
+	var duck_slot: int = gs.discard_order.find("p0_duck")
+	var r: Dictionary = gs.pick_discard("p1", duck_slot)
+	if not r.ok:
+		return r.error
+	if p0.eliminated or gs.phase != GameTypes.Phase.ROUND_OVER:
+		return "p0 still has 2 Safes, so must stay in (eliminated=%s phase=%s)" % [p0.eliminated, gs.phase]
+	gs.next_round("p0")
+	if p0.hand.size() != 2 or gs.cards.has("p0_duck"):
+		return "p0 should get its 2 Safes back after Next round, got %s" % [p0.hand]
+	return ""
+
+
+## Own Duck with every card flipped: the challenger picks from the centre row and stays in.
+func test_own_duck_all_flipped_uses_pick_row() -> String:
+	var gs := _game(3, 7)
+	var p0: Dictionary = gs.players["p0"]
+	p0.hand = [_card_of(gs, "p0", true), _card_of(gs, "p0", false)]
+	var r := _place_initial(gs, "p0", true)
+	if not r.ok:
+		return r.error
+	var err := _place_all_initial_safe(gs)
+	if err != "":
+		return err
+	for pid in ["p0", "p1", "p2"]:
+		r = gs.place_card(pid, String(gs.players[pid].hand[0]))
+		if not r.ok:
+			return r.error
+	r = gs.open_bid("p0", 2)
+	if not r.ok:
+		return r.error
+	err = _everyone_pass_except_bidder(gs)
+	if err != "":
+		return err
+	gs.flip_stack("p0", "p0")
+	gs.flip_stack("p0", "p0")
+	if gs.phase != GameTypes.Phase.CHOOSE_DISCARD or gs.discard_chooser_id != "p0" or int(gs.public_snapshot().discard_slots) != 2:
+		return "p0 should pick from its 2 flipped cards (phase %s chooser %s slots %s)" % [
+			gs.phase, gs.discard_chooser_id, gs.public_snapshot().discard_slots
+		]
+	if gs.pick_discard("p1", 0).ok:
+		return "only p0 may pick after its own Duck"
+	r = gs.pick_discard("p0", gs.discard_order.find("p0_duck"))
+	if not r.ok:
+		return r.error
+	if p0.eliminated or gs.phase != GameTypes.Phase.ROUND_OVER:
+		return "p0 keeps its Safe, so must stay in"
+	for pid in gs.player_order:
+		if gs.private_snapshot(pid).you.has("upgrade_offer"):
+			return "hitting your own Duck grants nobody an upgrade"
+	gs.next_round("p0")
+	if p0.hand.size() != 1:
+		return "p0 should get its Safe back, got %s" % [p0.hand]
 	return ""
 
 
@@ -887,10 +970,12 @@ func test_last_card_eliminates_and_last_player_wins() -> String:
 	r = gs.flip_stack("p0", "p0")
 	if not r.ok:
 		return r.error
-	if gs.phase == GameTypes.Phase.CHOOSE_DISCARD:
-		r = gs.choose_discard("p0", String(gs.players["p0"].hand[0]))
-		if not r.ok:
-			return r.error
+	# p0's only card is its flipped Duck, so it goes through the pick row.
+	if gs.discard_chooser_id != "p0" or gs.discard_order != ["p0_duck"]:
+		return "p0 should pick its flipped Duck, got chooser %s order %s" % [gs.discard_chooser_id, gs.discard_order]
+	r = gs.pick_discard("p0", 0)
+	if not r.ok:
+		return r.error
 	if not gs.players["p0"].eliminated:
 		return "p0 should be eliminated"
 	# Not yet last player — p1 and p2 remain. Eliminate p1 the same way next hand.

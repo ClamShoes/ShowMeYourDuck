@@ -1157,9 +1157,13 @@ func _sync_parked_reveals(snap: Dictionary) -> void:
 			if mat and mat.has_method("clear_parked_reveals"):
 				mat.clear_parked_reveals()
 		return
+	# Only the loser's snapshot names the destroyed card, so only their mat drops it.
+	var destroyed := String(snap.get("last_discard", {}).get("card_id", ""))
 	# Group history by target mat.
 	var by_target: Dictionary = {}
 	for e in hist:
+		if destroyed != "" and String(e.get("card_id", "")) == destroyed:
+			continue
 		var tid := String(e.get("target_player_id", e.get("owner_id", "")))
 		if not by_target.has(tid):
 			by_target[tid] = []

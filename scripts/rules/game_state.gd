@@ -214,7 +214,7 @@ func pick_discard(player_id: String, slot: int) -> Dictionary:
 		return _fail("No such card")
 	_remove_card_forever(challenger_id, String(discard_order[slot]), slot)
 	var chooser: Dictionary = players[player_id]
-	if chooser.upgrade_offer.is_empty():
+	if player_id != challenger_id and chooser.upgrade_offer.is_empty():
 		chooser.upgrade_offer = DuckStamps.offers(rng, chooser.duck_progress.earned)
 	discard_chooser_id = ""
 	discard_order.clear()
@@ -385,23 +385,19 @@ func _start_reveal(who: String) -> void:
 
 func _fail_challenge(own_duck: bool) -> Dictionary:
 	_return_unflipped_stacks_to_hands()
-	if own_duck:
-		# Revealed cards stay parked; discard must come from remaining hand.
-		if players[challenger_id].hand.is_empty():
-			players[challenger_id].eliminated = true
-			return _after_failed_discard()
-		phase = GameTypes.Phase.CHOOSE_DISCARD
-		discard_chooser_id = challenger_id
-		current_player_id = challenger_id
-		return _ok()
-	var hand: Array = players[challenger_id].hand
-	if hand.is_empty():
+	var owned := _owned_cards(challenger_id)
+	if owned.is_empty():
 		players[challenger_id].eliminated = true
 		return _after_failed_discard()
 	phase = GameTypes.Phase.CHOOSE_DISCARD
-	discard_chooser_id = String(last_revealed.owner_id)
+	if own_duck and not players[challenger_id].hand.is_empty():
+		# The Duck is face-up, so the hand holds only Safes: tapping one is the whole choice.
+		discard_chooser_id = challenger_id
+		current_player_id = challenger_id
+		return _ok()
+	discard_chooser_id = challenger_id if own_duck else String(last_revealed.owner_id)
 	current_player_id = discard_chooser_id
-	discard_order = hand.duplicate()
+	discard_order = owned
 	_shuffle_array(discard_order)
 	return _ok()
 
@@ -415,7 +411,7 @@ func _succeed_challenge() -> Dictionary:
 
 
 func _after_failed_discard() -> Dictionary:
-	if players[challenger_id].hand.is_empty():
+	if _owned_cards(challenger_id).is_empty():
 		players[challenger_id].eliminated = true
 	var alive := _active_ids()
 	# Last player standing only applies when the table started with multiple seats.
@@ -457,9 +453,19 @@ func _return_unflipped_stacks_to_hands() -> void:
 func _return_revealed_to_hands() -> void:
 	for entry in flip_history:
 		var oid: String = String(entry.owner_id)
-		if players.has(oid):
+		if players.has(oid) and cards.has(entry.card_id):
 			players[oid].hand.append(entry.card_id)
 	flip_history.clear()
+
+
+## Hand plus this player's own flipped cards still face-up from this round (not destroyed).
+func _owned_cards(pid: String) -> Array:
+	var out: Array = players[pid].hand.duplicate()
+	for e in flip_history:
+		var cid := String(e.card_id)
+		if String(e.owner_id) == pid and cards.has(cid) and cid not in out:
+			out.append(cid)
+	return out
 
 
 func _collect_played_to_hands() -> void:
