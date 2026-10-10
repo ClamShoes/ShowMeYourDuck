@@ -7,6 +7,8 @@ const DuckDrawing = preload("res://scripts/ui/duck_drawing.gd")
 const CardPickerScript = preload("res://scripts/ui/card_picker.gd")
 const DuckEditorScript = preload("res://scripts/ui/duck_editor.gd")
 const ScreenFit = preload("res://scripts/ui/screen_fit.gd")
+const VolumeButtonScript = preload("res://scripts/ui/volume_button.gd")
+const Sounds = preload("res://scripts/audio/sfx.gd")
 const TOUCH_PX := 48.0
 
 const THUMB_BACK := Vector2(24, 32)
@@ -179,6 +181,15 @@ func _build() -> void:
 	add_child(_editor)
 	_editor.finished.connect(_on_duck_finished)
 
+	var volume := VolumeButtonScript.new()
+	volume.anchor_left = 1.0
+	volume.anchor_right = 1.0
+	volume.offset_left = -16.0 - TOUCH_PX
+	volume.offset_right = -16.0
+	volume.offset_top = 16.0
+	volume.offset_bottom = 16.0 + TOUCH_PX
+	add_child(volume)
+
 
 func _build_cards_panel(stage: Control) -> void:
 	var panel := Panel.new()
@@ -303,6 +314,8 @@ func _on_lobby(code: String, players: Array, is_host: bool, min_players: int) ->
 	_start_btn.disabled = n < min_players or n > GameTypes.MAX_PLAYERS
 	_start_btn.text = "Start game (%s/%s)" % [n, min_players] if n < min_players else "Start game (%s)" % n
 	_code_hint.text = _share_hint(n)
+	if _lobby_panel.visible and n > _last_players.size():
+		Sounds.play("player_join")
 	_last_players = players
 	_rebuild_player_rows()
 	_show_lobby(true)

@@ -23,6 +23,7 @@ config/icon="res://icon.svg"
 [autoload]
 
 Net="*res://scripts/net/net.gd"
+Sfx="*res://scripts/audio/sfx.gd"
 
 [display]
 

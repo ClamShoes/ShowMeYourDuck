@@ -17,6 +17,8 @@ const SeatSpace = preload("res://scripts/ui/seat_space.gd")
 const OpponentHandScript = preload("res://scripts/ui/opponent_hand.gd")
 const RemoteCursorsScript = preload("res://scripts/ui/remote_cursors.gd")
 const TutorialOverlayScript = preload("res://scripts/ui/tutorial_overlay.gd")
+const VolumeButtonScript = preload("res://scripts/ui/volume_button.gd")
+const Sounds = preload("res://scripts/audio/sfx.gd")
 
 ## Minimum height for buttons pressed during play, so they're tappable on phones.
 const TOUCH_PX := 48.0
@@ -36,6 +38,10 @@ const PLACE_FLIGHT_SEC := 0.45
 var _bid_amount := 1
 var _status: Label
 var _leave_btn: Button
+var _volume_btn: Button
+## Snapshot the last sounds were worked out from, and result sounds held until the banner shows.
+var _sound_snap: Dictionary = {}
+var _held_sounds: Array = []
 var _board_panel: PanelContainer
 var _banner: Label
 var _hand_box: HBoxContainer
@@ -181,11 +187,14 @@ func _build_chrome() -> void:
 	_leave_btn.pressed.connect(_leave)
 	add_child(_leave_btn)
 
+	_volume_btn = VolumeButtonScript.new()
+	add_child(_volume_btn)
+
 	_banner = Label.new()
 	_banner.add_theme_color_override("font_color", Color("f4d35e"))
 	add_child(_banner)
 	# A hovered opponent card raises itself to HOVER_Z; keep the top chrome readable over it.
-	for top_chrome in [_status, _leave_btn, _banner]:
+	for top_chrome in [_status, _leave_btn, _volume_btn, _banner]:
 		top_chrome.z_index = CardView.HOVER_Z + 1
 
 	_mats_root = Control.new()
@@ -298,9 +307,11 @@ func _layout_chrome() -> void:
 	var left := safe.position.x + 24.0
 	var right := safe.end.x
 	_status.position = Vector2(left, safe.position.y + 12.0)
-	_status.size = Vector2(right - 140.0 - left, 36)
+	_status.size = Vector2(right - 200.0 - left, 36)
 	_leave_btn.position = Vector2(right - 140.0, safe.position.y + 12.0)
 	_leave_btn.size = Vector2(110, TOUCH_PX)
+	_volume_btn.position = Vector2(right - 196.0, safe.position.y + 12.0)
+	_volume_btn.size = Vector2(TOUCH_PX, TOUCH_PX)
 	_banner.position = Vector2(left, safe.position.y + 48.0)
 	_banner.size = Vector2(right - 26.0 - left, 28)
 	var mid_x := safe.get_center().x
@@ -425,6 +436,46 @@ func _render() -> void:
 	_update_bid_row(snap, viewer)
 	_update_next_round_btn(snap)
 	_sync_stamp_picker(snap, viewer)
+	_play_snapshot_sounds(_sound_snap, snap, viewer)
+	_sound_snap = snap
+
+
+## Public events between two snapshots, so every screen hears the same thing. Point / out /
+## game-over sounds wait with the banner until the deciding flip and any discard have played.
+func _play_snapshot_sounds(prev: Dictionary, snap: Dictionary, viewer: String) -> void:
+	var phase := int(snap.get("phase", -1))
+	var was := int(prev.get("phase", -1))
+	if phase == GameTypes.Phase.PLACE_INITIAL and was != phase:
+		Sounds.play("round_start")
+	if not prev.is_empty():
+		if int(snap.get("current_bid", 0)) > int(prev.get("current_bid", 0)):
+			Sounds.play("bid")
+		if _count_players(snap, "passed") > _count_players(prev, "passed"):
+			Sounds.play("pass")
+		if phase == GameTypes.Phase.REVEAL and was != phase:
+			Sounds.play("challenge_start")
+		var me := String(snap.get("current_player_id", "")) == viewer
+		var was_me := String(prev.get("current_player_id", "")) == viewer
+		if me and (phase == GameTypes.Phase.PLACE_OR_BID or phase == GameTypes.Phase.BIDDING) and (not was_me or was != phase):
+			Sounds.play("your_turn")
+		if _count_players(snap, "points") > _count_players(prev, "points") and phase != GameTypes.Phase.GAME_OVER:
+			_held_sounds.append("point_scored")
+		if _count_players(snap, "eliminated") > _count_players(prev, "eliminated"):
+			_held_sounds.append("player_out")
+		if phase == GameTypes.Phase.GAME_OVER and was != phase:
+			_held_sounds.append("game_win" if String(snap.get("winner_id", "")) == viewer else "game_over")
+	if not _held_sounds.is_empty() and not _holding_result(snap) and _discards_in_flight() == 0:
+		for s in _held_sounds:
+			Sounds.play(s)
+		_held_sounds.clear()
+
+
+## Sum of a per-player field (bools count as 1).
+func _count_players(snap: Dictionary, field: String) -> int:
+	var n := 0
+	for p in snap.get("players", []):
+		n += int(p.get(field, 0))
+	return n
 
 
 ## Duck upgrade overlay for the Duck's owner: opens once the destroy FX is done, never blocks
@@ -439,6 +490,7 @@ func _sync_stamp_picker(snap: Dictionary, viewer: String) -> void:
 			and _discards_in_flight() == 0 and _reveals_in_flight() == 0:
 		var duck := DuckDrawing.load_local()
 		_stamp_picker.open(offer, duck if duck != null else DuckDrawing.default_image())
+		Sounds.play("stamp_offer")
 	var acting := _viewer_must_act(snap, viewer)
 	if acting and not _was_acting:
 		_stamp_picker.minimise()
@@ -458,6 +510,7 @@ func _viewer_must_act(snap: Dictionary, viewer: String) -> bool:
 
 
 func _on_stamp_finished(stamp_id: String, img: Image) -> void:
+	Sounds.play("stamp_place")
 	_stamp_sent_offer = _snapshot().get("you", {}).get("upgrade_offer", []).duplicate()
 	DuckDrawing.save_local(img)
 	var progress := PlayerCosmetics.load_progress()
@@ -635,6 +688,7 @@ func _on_reveal_sequence_finished(_mat) -> void:
 
 
 func _on_duck_presented(_mat, card) -> void:
+	Sounds.play("reveal_duck")
 	_shake_table()
 	if is_instance_valid(card):
 		_burst_mini_ducks(card.get_global_transform() * (CardView.SIZE * 0.5), String(card.owner_id))
@@ -975,6 +1029,7 @@ func _on_hand_card_hover(view, on: bool) -> void:
 		return
 	if on:
 		_hover_view = view
+		Sounds.play("card_hover")
 		Net.send_hand_fx("hover", _hand_slot_of(view))
 	elif _hover_view == view:
 		_hover_view = null
@@ -994,6 +1049,7 @@ func _hand_slot_of(view) -> int:
 func _on_card_drag_started(card) -> void:
 	_dragging_card = card
 	_hover_view = null
+	Sounds.play("card_pickup")
 	_last_reorder_idx = card.get_hand_index()
 	Net.send_hand_fx("drag", _last_reorder_idx)
 	_force_idle_hand(card)
@@ -1112,6 +1168,7 @@ func _on_remote_place_landed(pid: String, slot: int, card) -> void:
 		card.queue_free()
 	if _awaiting_tokens.get(pid, -1) == slot:
 		_awaiting_tokens.erase(pid)
+	Sounds.play("card_place")
 	var mat = _mats.get(pid)
 	var token = mat.stack_token(slot) if mat else null
 	if token:
@@ -1297,6 +1354,7 @@ func _on_card_dropped(card, at: Vector2) -> void:
 		_force_idle_hand()
 	else:
 		Net.send_hand_fx("drop", insert_at)
+		Sounds.play("card_return")
 		card.return_to_hand(insert_at)
 		_sync_local_order_from_hand()
 		_force_idle_hand()
@@ -1348,6 +1406,7 @@ func _hide_local_placing_stack_token() -> void:
 
 
 func _on_local_place_flip_finished(card) -> void:
+	Sounds.play("card_place")
 	_local_placing_card_id = ""
 	_local_placing_slot = -1
 	if _placing_card == card:
@@ -1468,6 +1527,7 @@ func _apply_new_reveal(snap: Dictionary) -> void:
 			reveal_index += 1
 	var mat = _mats.get(target)
 	if mat and mat.has_method("apply_revealed_to_top"):
+		Sounds.play("card_flip")
 		mat.apply_revealed_to_top(bool(revealed.get("is_duck", false)), card_id, reveal_index)
 	_last_applied_reveal_hist = hist_size
 	_pending_reveal_pid = ""
@@ -1620,6 +1680,7 @@ func _start_return_flights(nodes: Array, viewer: String) -> void:
 				n.queue_free()
 		_flight_pending.clear()
 		return
+	Sounds.play("cards_collect")
 	# Layout may have run before flyers moved; refresh dest after one frame if needed.
 	for node in nodes:
 		if not is_instance_valid(node):

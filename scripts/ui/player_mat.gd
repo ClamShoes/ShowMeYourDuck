@@ -10,6 +10,7 @@ signal duck_presented(mat, card)
 
 const CardScene = preload("res://scenes/card.tscn")
 const ScreenFit = preload("res://scripts/ui/screen_fit.gd")
+const Sounds = preload("res://scripts/audio/sfx.gd")
 
 const MAT_SIZE := Vector2(210, 168)
 const TOKEN_SCALE := 0.75
@@ -221,6 +222,8 @@ func _present(card: Node, is_duck: bool, idx: int, drift: Tween, present_pos: Ve
 	if not is_instance_valid(card) or not card.has_meta("revealing"):
 		return
 	card.z_index = PRESENT_Z
+	if not is_duck:
+		Sounds.play("reveal_safe")
 	var in_sec := DUCK_PRESENT_IN_SEC if is_duck else SAFE_PRESENT_IN_SEC
 	var s := DUCK_PRESENT_SCALE if is_duck else SAFE_PRESENT_SCALE
 	var tw := card.create_tween()

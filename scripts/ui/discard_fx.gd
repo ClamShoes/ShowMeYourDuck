@@ -8,6 +8,7 @@ signal finished(fx)
 
 const STYLES := ["explode", "burn", "rip", "samurai"]
 const BurnShader = preload("res://assets/burn.gdshader")
+const Sounds = preload("res://scripts/audio/sfx.gd")
 const CARD := Vector2(96, 128)
 const DURATION := {"explode": 1.1, "burn": 1.35, "rip": 1.3, "samurai": 1.5}
 
@@ -96,6 +97,7 @@ func _make_card() -> void:
 
 func _present_to(to_global: Vector2, to_scale: float) -> void:
 	_presenting = true
+	Sounds.play("discard_present")
 	rotation += PRESENT_TILT * (1.0 if _rng.randf() < 0.5 else -1.0)
 	var tw := create_tween().set_parallel(true)
 	tw.tween_property(self, "global_position", to_global, PRESENT_SEC).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
@@ -113,6 +115,7 @@ func _end_present() -> void:
 
 func _begin_style() -> void:
 	_shadow.visible = false
+	Sounds.play("discard_" + style)
 	match style:
 		"burn":
 			var mat := ShaderMaterial.new()

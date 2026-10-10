@@ -14,6 +14,7 @@ const StatusTextScript = preload("res://scripts/ui/status_text.gd")
 const DuckStamps = preload("res://scripts/ui/duck_stamps.gd")
 const SeatSpace = preload("res://scripts/ui/seat_space.gd")
 const ScreenFit = preload("res://scripts/ui/screen_fit.gd")
+const Sounds = preload("res://scripts/audio/sfx.gd")
 
 var _failed := 0
 var _passed := 0
@@ -77,6 +78,8 @@ func _init() -> void:
 	_run("cursor_mapping_is_continuous", test_cursor_mapping_is_continuous)
 	_run("server_hand_fx_relay_validates", test_server_hand_fx_relay_validates)
 	_run("server_cursor_relay_validates", test_server_cursor_relay_validates)
+	_run("sound_settings_round_trip", test_sound_settings_round_trip)
+	_run("every_sound_has_a_file", test_every_sound_has_a_file)
 	print("\n%d passed, %d failed" % [_passed, _failed])
 	quit(1 if _failed > 0 else 0)
 
@@ -687,6 +690,37 @@ func test_profile_progress_round_trips_and_editor_clears() -> String:
 		return "load_local should carry duck_progress: %s" % via_local
 	if not cleared.earned.is_empty() or not cleared.powers.is_empty():
 		return "saving empty progress (duck edited) clears it: %s" % cleared
+	return ""
+
+
+func test_sound_settings_round_trip() -> String:
+	var old_path: String = Sounds.path
+	Sounds.path = "user://test_settings.cfg"
+	var defaults := Sounds.load_settings()
+	Sounds.set_volume(0.35)
+	Sounds.set_muted(true)
+	var saved := Sounds.load_settings()
+	Sounds.set_volume(7.0)
+	var clamped := Sounds.load_settings()
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(Sounds.path))
+	Sounds.path = old_path
+	Sounds._apply(Sounds.load_settings())
+	if not is_equal_approx(defaults.volume, Sounds.DEFAULT_VOLUME) or defaults.muted:
+		return "no file should give the defaults: %s" % defaults
+	if not is_equal_approx(saved.volume, 0.35) or not saved.muted:
+		return "volume + mute should round-trip: %s" % saved
+	if clamped.volume != 1.0 or not clamped.muted:
+		return "volume clamps to 1 and keeps mute: %s" % clamped
+	return ""
+
+
+func test_every_sound_has_a_file() -> String:
+	for style in DiscardFxScript.STYLES:
+		if not ("discard_" + style) in Sounds.NAMES:
+			return "discard style %s has no sound name" % style
+	for sound in Sounds.NAMES:
+		if not ResourceLoader.exists(Sounds.DIR + sound + ".ogg") and not ResourceLoader.exists(Sounds.DIR + sound + ".wav"):
+			return "missing sound file for %s (run tests/gen_sounds.gd)" % sound
 	return ""
 
 
