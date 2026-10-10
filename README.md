@@ -66,6 +66,35 @@ The app joins the same live server (and the same rooms) as the web build at [sho
 
 **iOS (later)**: the same code works (it checks the `mobile` feature and the screen safe area). You need a Mac with Xcode, an Apple Developer account, and an iOS export preset; Godot exports an Xcode project to build and sign there.
 
+## Deploying
+
+The live game is [showmeyourduck.paff.me](https://showmeyourduck.paff.me/); Android testers get the app from [/download/](https://showmeyourduck.paff.me/download/). Commit your work on `main`, then run one of:
+
+```
+deploy.bat          (web + server)
+deploy.bat apk      (web + server + new APK on the download page)
+```
+
+(`.\deploy.ps1` / `.\deploy.ps1 -Apk` in PowerShell does the same.) It stops at the first failure. Steps:
+
+1. Checks you're on `main` with nothing uncommitted (except `web/`), then `git pull --ff-only`.
+2. Runs `tests/run_tests.gd`.
+3. Exports Web to `web/` and commits it as `Web build: <last commit's subject>` if it changed.
+4. Pushes `main` and runs `~/update-duck.sh` on the server (pull, import, copy `web/` to `/var/www/duck`, restart `duck`).
+5. With `apk`: exports the debug-signed APK to `export/android/ShowMeYourDuck.apk` and uploads it, plus `deploy/download/index.html` (with the date, commit and `PROTOCOL_VERSION` filled in), to `/var/www/duck/download/`.
+6. Checks the server is on your commit, the site answers, and the APK is being served.
+
+Use `apk` whenever `PROTOCOL_VERSION` changes (older apps then say "please update") or when testers should get new features. A plain deploy leaves the published APK alone. The APK isn't kept in git.
+
+Needs: `ShowMeYourDuck.ppk` in the repo root (not in git), PuTTY's `plink` / `pscp` on PATH, and the Android setup above for `apk`.
+
+**Server notes:** the server is `ec2-user@13.239.116.120` (Amazon Linux, repo at `/opt/duck`, Caddy serving `/var/www/duck` and proxying `/ws` to the game server on port 9080). `~/update-duck.sh` copies with `rsync --delete --exclude /download/`; that exclude is what keeps the APK alive across deploys, so keep it if you ever rewrite the script. Manual fallback:
+
+```
+plink -batch -i ShowMeYourDuck.ppk ec2-user@13.239.116.120 ~/update-duck.sh
+pscp -i ShowMeYourDuck.ppk export/android/ShowMeYourDuck.apk ec2-user@13.239.116.120:/var/www/duck/download/
+```
+
 ## Tests
 
 ```
