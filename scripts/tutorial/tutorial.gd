@@ -4,7 +4,8 @@ extends Node
 ## current step asks for is accepted.
 ##
 ## Steps (in order): {say, button} waits for the button; {say, expect, target} waits for that
-## intent from you; {bot, act} plays a bot move after a short pause (keeps the last `say`).
+## intent from you; {bot, act} plays a bot move after a short pause (keeps the last `say`);
+## {say, button, bot, act} holds the bots until the button is pressed, then plays like {bot, act}.
 
 signal step_changed(text: String, target: String, button: String)
 signal finished
@@ -14,44 +15,44 @@ const GameTypes = preload("res://scripts/rules/types.gd")
 
 const YOU := "you"
 const BOT_PAUSE := {"place_card": 0.8, "open_bid": 1.0, "pass": 0.9, "flip": 2.0}
-## Bot steps only show a short line like this; what they did is explained in the next step you act on.
-const WAIT := "Bill and Daisy are taking their turns…"
+## Opens each run of bot moves (with Next); what they did is explained in the next step you act on.
+const BOTS_TURN := "Bill and Daisy take their turns."
 
 const STEPS := [
 	# Round 1: someone else flips your Duck, so you destroy one of their cards.
 	{say = "Welcome! Everyone has three Safe cards and one Duck. Cards are played face-down, so nobody knows which is which.", button = "Next"},
 	{say = "Drag your Duck onto your mat, the box in the middle.", expect = {type = "place_card", duck = true}, target = "hand_duck"},
-	{say = WAIT, bot = "bill", act = {type = "place_card"}},
+	{say = BOTS_TURN, button = "Next", bot = "bill", act = {type = "place_card"}},
 	{bot = "daisy", act = {type = "place_card"}},
 	{bot = "bill", act = {type = "open_bid", amount = 3}},
 	{bot = "daisy", act = {type = "pass"}},
 	{say = "Bill bid 3: he bets he can flip 3 cards without hitting a Duck, because he thinks everything on the table is Safe. Daisy passed. Pass too and let him try.", expect = {type = "pass"}, target = "pass"},
-	{say = "Bill is flipping cards…", bot = "bill", act = {type = "flip", target_player_id = "bill"}},
+	{say = "Bill flips cards to try to win his bet.", button = "Next", bot = "bill", act = {type = "flip", target_player_id = "bill"}},
 	{bot = "bill", act = {type = "flip", target_player_id = "daisy"}},
 	{bot = "bill", act = {type = "flip", target_player_id = YOU}},
 	{say = "The bidder must flip their own cards first, then anyone else's. Bill flipped his, then Daisy's, then your Duck! His bet fails, and you destroy one of his cards. Pick one.", expect = {type = "pick_discard"}, target = "pick"},
 	{say = "Gone for good. Fewer cards means fewer ways to bluff. Press Next round.", expect = {type = "next_round"}, target = "next_round"},
 	# Round 2: bid only what you can flip safely.
 	{say = "Round 2: winning a bet. Play a Safe onto your mat.", expect = {type = "place_card", duck = false}, target = "hand_safe"},
-	{say = WAIT, bot = "bill", act = {type = "place_card"}},
+	{say = BOTS_TURN, button = "Next", bot = "bill", act = {type = "place_card"}},
 	{bot = "daisy", act = {type = "place_card"}},
 	{bot = "bill", act = {type = "place_card"}},
 	{bot = "daisy", act = {type = "place_card"}},
 	{say = "Bill and Daisy each added a second card. Your card is Safe, and you think Daisy's are too. Set the bid to 2 with - and +, then press Bid.", expect = {type = "open_bid", amount = 2}, target = "bid"},
-	{say = WAIT, bot = "bill", act = {type = "pass"}},
+	{say = BOTS_TURN, button = "Next", bot = "bill", act = {type = "pass"}},
 	{bot = "daisy", act = {type = "pass"}},
 	{say = "Bill and Daisy both passed, so the bet is yours. Now prove it: flip your own card first. Drag it sideways and let go past halfway.", expect = {type = "flip", target_player_id = YOU}, target = "mat:you"},
 	{say = "Safe! One more. Flip Daisy's top card.", expect = {type = "flip", target_player_id = "daisy"}, target = "mat:daisy"},
 	{say = "Two Safes: you won the bet and score a point. Two points wins the game. Press Next round.", expect = {type = "next_round"}, target = "next_round"},
 	# Round 3: flipping your own Duck costs you a card of your choice.
 	{say = "Round 3: bluffs can backfire. Play a Safe.", expect = {type = "place_card", duck = false}, target = "hand_safe"},
-	{say = WAIT, bot = "bill", act = {type = "place_card"}},
+	{say = BOTS_TURN, button = "Next", bot = "bill", act = {type = "place_card"}},
 	{bot = "daisy", act = {type = "place_card"}},
 	{say = "Your turn. Put your Duck on top, hoping it scares everyone off bidding.", expect = {type = "place_card", duck = true}, target = "hand_duck"},
-	{say = WAIT, bot = "bill", act = {type = "place_card"}},
+	{say = BOTS_TURN, button = "Next", bot = "bill", act = {type = "place_card"}},
 	{bot = "daisy", act = {type = "place_card"}},
 	{say = "Now bid 2: set it with - and +, then press Bid.", expect = {type = "open_bid", amount = 2}, target = "bid"},
-	{say = WAIT, bot = "bill", act = {type = "pass"}},
+	{say = BOTS_TURN, button = "Next", bot = "bill", act = {type = "pass"}},
 	{bot = "daisy", act = {type = "pass"}},
 	{say = "Nobody fell for it: both passed. You must flip your own stack first, top card first, and your Duck is on top. Flip it.", expect = {type = "flip", target_player_id = YOU}, target = "mat:you"},
 	{say = "You hit your own Duck! It comes back to your hand. You lose one card, but you choose which, even the Duck. Tap one.", expect = {type = "choose_discard"}, target = "hand"},
@@ -61,6 +62,8 @@ const STEPS := [
 var gs: GameStateScript
 var step := -1
 var _text := ""
+## Button shown on the panel; cleared once pressed on a bot step so the bots play and it hides.
+var _button := ""
 ## Bumped when a bot pause starts, so only the latest pause plays its move.
 var _bot_seq := 0
 
@@ -113,7 +116,12 @@ func submit(intent: Dictionary) -> void:
 
 ## Next / Finish on the instruction panel.
 func press_button() -> void:
-	if not current().has("button"):
+	if _button == "":
+		return
+	if current().has("bot"):
+		_button = ""
+		announce()
+		_start_bot()
 		return
 	if step == STEPS.size() - 1:
 		finished.emit()
@@ -122,10 +130,10 @@ func press_button() -> void:
 
 
 func _hint() -> String:
+	if _button != "":
+		return "Read the instructions, then press %s." % _button
 	if current().has("bot"):
 		return "Wait for the others to play."
-	if current().has("button"):
-		return "Read the instructions, then press %s." % current().button
 	if current().expect.has("amount"):
 		return "Bid exactly %d." % current().expect.amount
 	return "Not that one - follow the instructions."
@@ -133,7 +141,7 @@ func _hint() -> String:
 
 ## Re-sends the current instruction (the overlay calls this when the table opens).
 func announce() -> void:
-	step_changed.emit(_text, target(), String(current().get("button", "")))
+	step_changed.emit(_text, target(), _button)
 
 
 func _go(i: int) -> void:
@@ -141,10 +149,15 @@ func _go(i: int) -> void:
 	var s := current()
 	if s.has("say"):
 		_text = String(s.say)
+	_button = String(s.get("button", ""))
 	announce()
-	if s.has("bot"):
-		_bot_seq += 1
-		get_tree().create_timer(BOT_PAUSE.get(String(s.act.type), 1.0)).timeout.connect(_on_bot_timer.bind(_bot_seq))
+	if s.has("bot") and _button == "":
+		_start_bot()
+
+
+func _start_bot() -> void:
+	_bot_seq += 1
+	get_tree().create_timer(BOT_PAUSE.get(String(current().act.type), 1.0)).timeout.connect(_on_bot_timer.bind(_bot_seq))
 
 
 func _on_bot_timer(seq: int) -> void:

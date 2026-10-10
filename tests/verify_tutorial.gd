@@ -30,6 +30,12 @@ func _run() -> void:
 		var s: Dictionary = t.current()
 		if s.has("bot"):
 			var at: int = t.step
+			if s.has("button"):
+				for _i in 30:
+					await process_frame
+				if t.step != at:
+					return _fail("bot step %d played before Next was pressed" % at)
+				t.press_button()
 			for _i in 200:
 				await process_frame
 				if t.step != at:
