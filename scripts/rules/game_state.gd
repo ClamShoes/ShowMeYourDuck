@@ -385,17 +385,24 @@ func _start_reveal(who: String) -> void:
 
 func _fail_challenge(own_duck: bool) -> Dictionary:
 	_return_unflipped_stacks_to_hands()
+	if own_duck:
+		# Your own flipped cards (the Duck and any Safes above it) go back to your hand and you
+		# discard any one of them. The entries stay in flip_history, marked, so clients still see the flip.
+		var hand: Array = players[challenger_id].hand
+		for e in flip_history:
+			if String(e.owner_id) == challenger_id:
+				e["returned"] = true
+				hand.append(String(e.card_id))
+		phase = GameTypes.Phase.CHOOSE_DISCARD
+		discard_chooser_id = challenger_id
+		current_player_id = challenger_id
+		return _ok()
 	var owned := _owned_cards(challenger_id)
 	if owned.is_empty():
 		players[challenger_id].eliminated = true
 		return _after_failed_discard()
 	phase = GameTypes.Phase.CHOOSE_DISCARD
-	if own_duck and not players[challenger_id].hand.is_empty():
-		# The Duck is face-up, so the hand holds only Safes: tapping one is the whole choice.
-		discard_chooser_id = challenger_id
-		current_player_id = challenger_id
-		return _ok()
-	discard_chooser_id = challenger_id if own_duck else String(last_revealed.owner_id)
+	discard_chooser_id = String(last_revealed.owner_id)
 	current_player_id = discard_chooser_id
 	discard_order = owned
 	_shuffle_array(discard_order)
@@ -453,7 +460,7 @@ func _return_unflipped_stacks_to_hands() -> void:
 func _return_revealed_to_hands() -> void:
 	for entry in flip_history:
 		var oid: String = String(entry.owner_id)
-		if players.has(oid) and cards.has(entry.card_id):
+		if players.has(oid) and cards.has(entry.card_id) and not entry.get("returned", false):
 			players[oid].hand.append(entry.card_id)
 	flip_history.clear()
 

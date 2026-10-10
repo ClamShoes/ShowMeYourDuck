@@ -99,12 +99,18 @@ var _remote_points: Dictionary = {}
 var _awaiting_tokens: Dictionary = {}
 ## pid -> that seat's rotation on this screen (SeatSpace.seat_rotation)
 var _seat_rot: Dictionary = {}
+## card_id -> Return: this round's own-Duck cards going back to their owner's hand.
+var _returning: Dictionary = {}
+var _return_timer_on := false
 
 const CURSOR_SEND_MS := 50
 
 const REVEAL_SEND_MS := 80
 const REVEAL_SEND_MIN_DT := 0.05
 const RETURN_FLIGHT_SEC := 0.45
+## Own Duck: how long the flipped cards rest face-up before flying back to their owner's hand.
+const RETURN_PAUSE_SEC := 0.7
+enum Return { WAITING, FLYING, LANDED }
 const TABLE_SHAKE_SEC := 0.45
 const TABLE_SHAKE_PX := 10.0
 ## Discarded cards fly to screen centre at this scale before being destroyed.
@@ -399,6 +405,7 @@ func _render() -> void:
 	# Resolve reveal face on the pre-rebuild top token, then layout (stack count drops).
 	# Before the status/banner so a deciding flip holds the result text this same frame.
 	_apply_new_reveal(snap)
+	_sync_returned(snap, viewer)
 	_apply_new_discard(snap, viewer)
 	if not _discard_queue.is_empty() and _reveals_in_flight() == 0:
 		_flush_discards()
@@ -779,7 +786,7 @@ func _layout_opponent_hands(snap: Dictionary, seat_list: Array, viewer: String) 
 			_opp_hands[pid] = hand
 		var s: Dictionary = wanted[pid]
 		hand.place(SeatSpace.hand_xform(s.pos, s.dir, false, _area))
-		hand.sync_count(int(_player_info(snap, pid).get("hand_count", 0)))
+		hand.sync_count(int(_player_info(snap, pid).get("hand_count", 0)) - _returns_in_flight(snap, pid))
 
 
 ## Duck-owner pick: show the challenger's shuffled cards at centre once the Duck reveal lands.
@@ -1254,7 +1261,8 @@ func _can_discard(snap: Dictionary, viewer: String) -> bool:
 
 
 func _on_card_pressed(card) -> void:
-	if _can_discard(_snapshot(), _viewer_id()):
+	# Wait until any cards flying back from the mat have landed: the choice includes them.
+	if _can_discard(_snapshot(), _viewer_id()) and _flight_pending.is_empty():
 		_submit(GameProtocol.choose_discard(card.card_id))
 
 
@@ -1482,6 +1490,9 @@ func _sync_parked_reveals(snap: Dictionary) -> void:
 	for e in hist:
 		if destroyed != "" and String(e.get("card_id", "")) == destroyed:
 			continue
+		# Returned own-Duck cards stay on the mat only until their flight home starts.
+		if e.get("returned", false) and _returning.get(String(e.get("card_id", "")), Return.WAITING) != Return.WAITING:
+			continue
 		var tid := String(e.get("target_player_id", e.get("owner_id", "")))
 		if not by_target.has(tid):
 			by_target[tid] = []
@@ -1502,22 +1513,74 @@ func _take_parked_if_new_hand(snap: Dictionary) -> Array:
 	for mat in _mats.values():
 		if mat == null or not mat.has_method("take_parked_reveals"):
 			continue
-		var nodes: Array = mat.take_parked_reveals()
-		for n in nodes:
-			if not is_instance_valid(n):
-				continue
-			# Reparent off the mat immediately so clear_parked won't free them; keep the
-			# (possibly rotated) on-screen pose as the flight's start.
-			var dest_parent: Node = _drag_layer if _drag_layer else self
-			if n.get_parent():
-				SeatSpace.reparent_keep_pose(n, dest_parent)
-			else:
-				dest_parent.add_child(n)
-			n.top_level = true
-			n.z_index = 50
-			n.mouse_filter = Control.MOUSE_FILTER_IGNORE
-			out.append(n)
+		out.append_array(_detach_for_flight(mat.take_parked_reveals()))
 	return out
+
+
+## Reparent reveal cards off their mat so clear_parked won't free them, keeping the (possibly
+## rotated) on-screen pose as the flight's start.
+func _detach_for_flight(nodes: Array) -> Array:
+	var out: Array = []
+	for n in nodes:
+		if not is_instance_valid(n):
+			continue
+		var dest_parent: Node = _drag_layer if _drag_layer else self
+		if n.get_parent():
+			SeatSpace.reparent_keep_pose(n, dest_parent)
+		else:
+			dest_parent.add_child(n)
+		n.top_level = true
+		n.z_index = 50
+		n.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		out.append(n)
+	return out
+
+
+## Own Duck: the rules already put that player's flipped cards back in their hand (flip_history
+## entries marked `returned`). Let the Duck reveal finish, rest a moment, then fly them home.
+func _sync_returned(snap: Dictionary, viewer: String) -> void:
+	var hist: Array = snap.get("flip_history", [])
+	if hist.is_empty() or int(snap.get("phase", -1)) == GameTypes.Phase.PLACE_INITIAL:
+		_returning.clear()
+		return
+	for e in hist:
+		var cid := String(e.get("card_id", ""))
+		if not e.get("returned", false) or cid == "" or _returning.has(cid):
+			continue
+		_returning[cid] = Return.WAITING
+		if String(e.get("owner_id", "")) == viewer:
+			_flight_pending[cid] = true
+	if not _return_timer_on and Return.WAITING in _returning.values() and _reveals_in_flight() == 0:
+		_return_timer_on = true
+		get_tree().create_timer(RETURN_PAUSE_SEC).timeout.connect(_fly_returned)
+
+
+func _fly_returned() -> void:
+	_return_timer_on = false
+	var viewer := _viewer_id()
+	var nodes: Array = []
+	for e in _snapshot().get("flip_history", []):
+		var cid := String(e.get("card_id", ""))
+		if _returning.get(cid, -1) != Return.WAITING:
+			continue
+		_returning[cid] = Return.FLYING
+		var mat = _mats.get(String(e.get("target_player_id", "")))
+		var node = mat.take_parked_reveal(cid) if mat else null
+		if node == null:
+			_on_return_flight_done(null, cid, String(e.get("owner_id", "")) == viewer)
+		else:
+			nodes.append(node)
+	_start_return_flights(_detach_for_flight(nodes), viewer)
+	_queue_render()
+
+
+## Returned cards of `pid` still on their way back (their hand_count already includes them).
+func _returns_in_flight(snap: Dictionary, pid: String) -> int:
+	var n := 0
+	for e in snap.get("flip_history", []):
+		if String(e.get("owner_id", "")) == pid and _returning.get(String(e.get("card_id", "")), Return.LANDED) != Return.LANDED:
+			n += 1
+	return n
 
 
 func _reveal_owner_of(node: Node) -> String:
@@ -1611,6 +1674,9 @@ func _find_hand_card(card_id: String):
 func _on_return_flight_done(node: Node, card_id: String, to_hand: bool) -> void:
 	if is_instance_valid(node):
 		node.queue_free()
+	if _returning.has(card_id):
+		_returning[card_id] = Return.LANDED
+		_queue_render()
 	if to_hand and card_id != "":
 		_flight_pending.erase(card_id)
 		var hand_view = _find_hand_card(card_id)

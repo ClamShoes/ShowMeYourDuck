@@ -52,7 +52,7 @@ const STEPS := [
 	{say = "Nobody falls for it.", bot = "bill", act = {type = "pass"}},
 	{bot = "daisy", act = {type = "pass"}},
 	{say = "You must flip your own stack first, top card first, and your Duck is on top. Flip it.", expect = {type = "flip", target_player_id = YOU}, target = "mat:you"},
-	{say = "You hit your own Duck, so you lose a card, but you choose which. Tap one of your cards.", expect = {type = "choose_discard"}, target = "hand"},
+	{say = "You hit your own Duck! It comes back to your hand. You lose one card, but you choose which, even the Duck. Tap one.", expect = {type = "choose_discard"}, target = "hand"},
 	{say = "That's the game! Bet right twice to win. Lose all your cards and you're out. Now go play with friends.", button = "Finish"},
 ]
 

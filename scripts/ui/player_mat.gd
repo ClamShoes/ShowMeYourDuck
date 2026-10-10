@@ -355,6 +355,17 @@ func take_parked_reveals() -> Array:
 	return out
 
 
+## Detach one parked reveal for a flight (caller owns it), or null when it isn't parked here.
+func take_parked_reveal(card_id: String):
+	var node = _parked.get(card_id)
+	_parked.erase(card_id)
+	if node == null or not is_instance_valid(node):
+		return null
+	_finish_sequence(node, false)
+	node.set("present_height", 0.0)
+	return node
+
+
 func clear_parked_reveals() -> void:
 	for cid in _parked.keys():
 		var node = _parked[cid]

@@ -92,11 +92,11 @@ func _card(gs, duck: bool) -> String:
 	return ""
 
 
-## Hand, stack and this round's face-up cards: everything not yet destroyed.
+## Hand, stack and this round's face-up cards: everything not yet destroyed (returned ones are in hand).
 func _owned(gs, pid: String) -> int:
 	var n: int = gs.players[pid].hand.size() + gs.players[pid].stack.size()
 	for e in gs.flip_history:
-		if String(e.owner_id) == pid:
+		if String(e.owner_id) == pid and gs.cards.has(e.card_id) and not e.get("returned", false):
 			n += 1
 	return n
 

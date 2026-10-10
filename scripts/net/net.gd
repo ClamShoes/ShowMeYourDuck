@@ -25,7 +25,7 @@ const DEFAULT_PORT := 9080
 ## Phone/tablet builds can't run a local server; they join the same rooms as the web build.
 const LIVE_SERVER_URL := "wss://showmeyourduck.paff.me/ws"
 ## Bump whenever any RPC or snapshot shape changes; server, web and app builds must match.
-const PROTOCOL_VERSION := 2
+const PROTOCOL_VERSION := 3
 ## Duck PNGs (up to DuckDrawing.MAX_BYTES each) can queue together on join; default is 64 KiB.
 const WS_BUFFER_BYTES := 1 << 20
 ## Servers older than the handshake never answer it.
