@@ -18,6 +18,7 @@ func _run() -> void:
 	ed.open(DuckDrawing.blank_image(), "bordered")
 	_check("paint_line_changes_pixels", _paint_line(ed))
 	_check("flood_fill_fills_enclosed_area", _flood_fill(ed))
+	_check("transparent_fill_clears_area", _transparent_fill(ed))
 	_check("eraser_clears_to_transparent", _eraser(ed))
 	_check("undo_redo_restore_exactly", _undo_redo(ed))
 	_check("export_fits_and_decodes", _export(ed))
@@ -64,6 +65,21 @@ func _flood_fill(ed) -> String:
 		return "inside not filled"
 	if img.get_pixel(100, 120).a != 0.0:
 		return "fill escaped the box"
+	return ""
+
+
+## Reuses the red box from _flood_fill.
+func _transparent_fill(ed) -> String:
+	ed.set_tool("fill")
+	ed.set_color(Color(0, 0, 0, 0))
+	ed.begin_edit()
+	ed.flood_fill(Vector2i(40, 60))
+	var img: Image = ed.image()
+	ed.set_tool("brush")
+	if img.get_pixel(40, 60).a != 0.0:
+		return "inside should be transparent"
+	if not img.get_pixel(40, 40).is_equal_approx(Color.BLACK):
+		return "outline should stay opaque"
 	return ""
 
 

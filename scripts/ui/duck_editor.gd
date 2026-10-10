@@ -135,7 +135,7 @@ func set_color(c: Color) -> void:
 	color = c
 	if _swatch:
 		_swatch.color = c
-	if _custom:
+	if _custom and c.a > 0.0:
 		_custom.color = c
 	if tool == "eraser" or tool == "picker":
 		set_tool("brush")
@@ -286,17 +286,39 @@ func _build() -> void:
 	cur_row.add_theme_constant_override("separation", 8)
 	right.add_child(cur_row)
 	cur_row.add_child(_caption("Current"))
+	var checker := _checker_texture()
+	var swatch_bg := TextureRect.new()
+	swatch_bg.custom_minimum_size = Vector2(48, 32)
+	swatch_bg.texture = checker
+	swatch_bg.stretch_mode = TextureRect.STRETCH_TILE
+	swatch_bg.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	cur_row.add_child(swatch_bg)
 	_swatch = ColorRect.new()
-	_swatch.custom_minimum_size = Vector2(48, 32)
+	_swatch.set_anchors_preset(PRESET_FULL_RECT)
 	_swatch.color = color
-	cur_row.add_child(_swatch)
+	swatch_bg.add_child(_swatch)
 	_custom = ColorPickerButton.new()
 	_custom.text = "Custom…"
 	_custom.custom_minimum_size = Vector2(120, 32)
 	_custom.edit_alpha = false
 	_custom.color = color
-	_custom.color_changed.connect(set_color)
+	_custom.color_changed.connect(func(c: Color): set_color(Color(c, 1.0)))
 	cur_row.add_child(_custom)
+	var clear := Button.new()
+	clear.text = "See-through"
+	clear.tooltip_text = "Paint or fill with nothing, so only your duck shows"
+	clear.custom_minimum_size = Vector2(120, 32)
+	var clear_sb := StyleBoxTexture.new()
+	clear_sb.texture = checker
+	clear_sb.axis_stretch_horizontal = StyleBoxTexture.AXIS_STRETCH_MODE_TILE
+	clear_sb.axis_stretch_vertical = StyleBoxTexture.AXIS_STRETCH_MODE_TILE
+	for st in ["normal", "hover", "pressed", "focus"]:
+		clear.add_theme_stylebox_override(st, clear_sb)
+	for c in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color"]:
+		clear.add_theme_color_override(c, Color("1a1a1a"))
+	clear.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	clear.pressed.connect(set_color.bind(Color(0, 0, 0, 0)))
+	cur_row.add_child(clear)
 
 	right.add_child(_caption("On your card"))
 	_preview = _pixel_rect(Vector2(CardArt.CARD_SIZE * 2))
@@ -324,6 +346,15 @@ func _build() -> void:
 
 	set_tool(tool)
 	set_brush_size(brush_size)
+
+
+## Grey/white checks marking "transparent" (current swatch and the See-through button).
+static func _checker_texture() -> ImageTexture:
+	var img := Image.create(8, 8, false, Image.FORMAT_RGBA8)
+	img.fill(Color.WHITE)
+	img.fill_rect(Rect2i(0, 0, 4, 4), Color("c3c3c3"))
+	img.fill_rect(Rect2i(4, 4, 4, 4), Color("c3c3c3"))
+	return ImageTexture.create_from_image(img)
 
 
 func _caption(text: String) -> Label:

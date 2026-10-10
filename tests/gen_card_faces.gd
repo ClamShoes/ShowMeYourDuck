@@ -35,22 +35,17 @@ func _write_emblem_safe() -> void:
 	img.save_png("res://assets/cards/emblem_safe.png")
 
 
-## Default duck art — replaced per player by their drawing later.
+## Default duck art — replaced per player by their drawing later. Transparent around the duck
+## so the reveal confetti is just the duck.
 func _write_duck_default() -> void:
 	var img := Image.create(EMBLEM_W, EMBLEM_H, false, Image.FORMAT_RGBA8)
 	img.fill(Color(0, 0, 0, 0))
-	_fill_rect(img, 0, 0, EMBLEM_W, EMBLEM_H, Color("fff8e1"))
-	_border_rect(img, 0, 0, EMBLEM_W, EMBLEM_H, Color("1a1a1a"))
-	_border_rect(img, 1, 1, EMBLEM_W - 2, EMBLEM_H - 2, Color("1a1a1a"))
-	# Water
-	_fill_rect(img, 4, 56, EMBLEM_W - 8, 6, Color("90caf9"))
 	# Body, wing, head, bill, eye
-	_fill_ellipse(img, 32, 46, 22, 13, Color("ffc107"))
-	_fill_ellipse(img, 27, 44, 11, 6, Color("ffa000"))
-	_fill_ellipse(img, 46, 25, 11, 10, Color("ffca28"))
-	_fill_ellipse(img, 59, 28, 8, 4, Color("ff7043"))
-	_fill_ellipse(img, 49, 22, 2, 2, Color("1a1a1a"))
-	_stamp_text_block(img, "DUCK", Color("1a1a1a"), 68)
+	_fill_ellipse(img, 32, 54, 22, 13, Color("ffc107"))
+	_fill_ellipse(img, 27, 52, 11, 6, Color("ffa000"))
+	_fill_ellipse(img, 46, 33, 11, 10, Color("ffca28"))
+	_fill_ellipse(img, 59, 36, 8, 4, Color("ff7043"))
+	_fill_ellipse(img, 49, 30, 2, 2, Color("1a1a1a"))
 	img.save_png("res://assets/cards/duck_default.png")
 
 
