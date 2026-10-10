@@ -26,6 +26,12 @@ func _run() -> void:
 	var lobby = load("res://scenes/lobby.tscn").instantiate()
 	root.add_child(lobby)
 	await _save("lobby")
+	net.player_id = "a"
+	lobby._on_lobby("QUACK", [
+		{"player_id": "a", "name": "Jake", "host": true},
+		{"player_id": "b", "name": "Player B"},
+	], true, 3)
+	await _save("lobby_room")
 	lobby._open_editor()
 	await _save("editor")
 	lobby._editor.visible = false
