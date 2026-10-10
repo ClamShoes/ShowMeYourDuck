@@ -34,7 +34,9 @@ foreach ($t in @('git', 'plink', 'pscp')) { if (-not (Get-Command $t -ErrorActio
 Step 'Checks'
 $branch = git branch --show-current
 if ($branch -ne 'main') { Fail "on branch '$branch'; switch to main first" }
-$dirty = git status --porcelain | Where-Object { $_ -notmatch '^.. web/' }
+# Content diffs, not `git status`: Godot rewrites .import files with identical content, which status
+# (with autocrlf) reports as modified.
+$dirty = @(git diff --name-only HEAD) + @(git ls-files --others --exclude-standard) | Where-Object { $_ -and $_ -notmatch '^web/' }
 if ($dirty) { Fail "uncommitted changes (commit or stash them first):`n$($dirty -join "`n")" }
 Run 'git pull' { git pull --ff-only }
 
@@ -43,9 +45,10 @@ Run 'tests failed' { & $Godot --headless --path . -s res://tests/run_tests.gd }
 
 Step 'Web export'
 Run 'web export' { & $Godot --headless --path . --export-release Web web/index.html }
-if (git status --porcelain web) {
+Run 'git add web' { git add web }
+git diff --cached --quiet
+if ($LASTEXITCODE -ne 0) {
 	$subject = git log -1 --format=%s
-	Run 'git add web' { git add web }
 	Run 'git commit' { git commit -q -m "Web build: $subject" }
 	Write-Host "Committed: Web build: $subject"
 } else {
