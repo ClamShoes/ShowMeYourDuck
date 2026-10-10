@@ -14,44 +14,46 @@ const GameTypes = preload("res://scripts/rules/types.gd")
 
 const YOU := "you"
 const BOT_PAUSE := {"place_card": 0.8, "open_bid": 1.0, "pass": 0.9, "flip": 2.0}
+## Bot steps only show a short line like this; what they did is explained in the next step you act on.
+const WAIT := "Bill and Daisy are taking their turns…"
 
 const STEPS := [
 	# Round 1: someone else flips your Duck, so you destroy one of their cards.
 	{say = "Welcome! Everyone has three Safe cards and one Duck. Cards are played face-down, so nobody knows which is which.", button = "Next"},
 	{say = "Drag your Duck onto your mat, the box in the middle.", expect = {type = "place_card", duck = true}, target = "hand_duck"},
-	{say = "Bill and Daisy play their opening cards.", bot = "bill", act = {type = "place_card"}},
+	{say = WAIT, bot = "bill", act = {type = "place_card"}},
 	{bot = "daisy", act = {type = "place_card"}},
-	{say = "Bill thinks everything on the table is Safe. He bets he can flip 3 cards without hitting a Duck.", bot = "bill", act = {type = "open_bid", amount = 3}},
+	{bot = "bill", act = {type = "open_bid", amount = 3}},
 	{bot = "daisy", act = {type = "pass"}},
-	{say = "Bill bid 3. Pass and let him try.", expect = {type = "pass"}, target = "pass"},
-	{say = "The bidder flips their own cards first, then anyone else's.", bot = "bill", act = {type = "flip", target_player_id = "bill"}},
+	{say = "Bill bid 3: he bets he can flip 3 cards without hitting a Duck, because he thinks everything on the table is Safe. Daisy passed. Pass too and let him try.", expect = {type = "pass"}, target = "pass"},
+	{say = "Bill is flipping cards…", bot = "bill", act = {type = "flip", target_player_id = "bill"}},
 	{bot = "bill", act = {type = "flip", target_player_id = "daisy"}},
 	{bot = "bill", act = {type = "flip", target_player_id = YOU}},
-	{say = "Bill flipped your Duck! His bet fails, and you destroy one of his cards. Pick one.", expect = {type = "pick_discard"}, target = "pick"},
+	{say = "The bidder must flip their own cards first, then anyone else's. Bill flipped his, then Daisy's, then your Duck! His bet fails, and you destroy one of his cards. Pick one.", expect = {type = "pick_discard"}, target = "pick"},
 	{say = "Gone for good. Fewer cards means fewer ways to bluff. Press Next round.", expect = {type = "next_round"}, target = "next_round"},
 	# Round 2: bid only what you can flip safely.
 	{say = "Round 2: winning a bet. Play a Safe onto your mat.", expect = {type = "place_card", duck = false}, target = "hand_safe"},
-	{say = "Bill and Daisy play theirs, then keep adding cards.", bot = "bill", act = {type = "place_card"}},
+	{say = WAIT, bot = "bill", act = {type = "place_card"}},
 	{bot = "daisy", act = {type = "place_card"}},
 	{bot = "bill", act = {type = "place_card"}},
 	{bot = "daisy", act = {type = "place_card"}},
-	{say = "Your card is Safe, and you think Daisy's are too. Set the bid to 2 with - and +, then press Bid.", expect = {type = "open_bid", amount = 2}, target = "bid"},
-	{say = "Bill and Daisy don't think they can beat that.", bot = "bill", act = {type = "pass"}},
+	{say = "Bill and Daisy each added a second card. Your card is Safe, and you think Daisy's are too. Set the bid to 2 with - and +, then press Bid.", expect = {type = "open_bid", amount = 2}, target = "bid"},
+	{say = WAIT, bot = "bill", act = {type = "pass"}},
 	{bot = "daisy", act = {type = "pass"}},
-	{say = "Now prove it. Flip your own card first: drag it sideways and let go past halfway.", expect = {type = "flip", target_player_id = YOU}, target = "mat:you"},
+	{say = "Bill and Daisy both passed, so the bet is yours. Now prove it: flip your own card first. Drag it sideways and let go past halfway.", expect = {type = "flip", target_player_id = YOU}, target = "mat:you"},
 	{say = "Safe! One more. Flip Daisy's top card.", expect = {type = "flip", target_player_id = "daisy"}, target = "mat:daisy"},
 	{say = "Two Safes: you won the bet and score a point. Two points wins the game. Press Next round.", expect = {type = "next_round"}, target = "next_round"},
 	# Round 3: flipping your own Duck costs you a card of your choice.
 	{say = "Round 3: bluffs can backfire. Play a Safe.", expect = {type = "place_card", duck = false}, target = "hand_safe"},
-	{say = "Bill and Daisy play their opening cards.", bot = "bill", act = {type = "place_card"}},
+	{say = WAIT, bot = "bill", act = {type = "place_card"}},
 	{bot = "daisy", act = {type = "place_card"}},
 	{say = "Your turn. Put your Duck on top, hoping it scares everyone off bidding.", expect = {type = "place_card", duck = true}, target = "hand_duck"},
-	{say = "Bill and Daisy add a card each.", bot = "bill", act = {type = "place_card"}},
+	{say = WAIT, bot = "bill", act = {type = "place_card"}},
 	{bot = "daisy", act = {type = "place_card"}},
 	{say = "Now bid 2: set it with - and +, then press Bid.", expect = {type = "open_bid", amount = 2}, target = "bid"},
-	{say = "Nobody falls for it.", bot = "bill", act = {type = "pass"}},
+	{say = WAIT, bot = "bill", act = {type = "pass"}},
 	{bot = "daisy", act = {type = "pass"}},
-	{say = "You must flip your own stack first, top card first, and your Duck is on top. Flip it.", expect = {type = "flip", target_player_id = YOU}, target = "mat:you"},
+	{say = "Nobody fell for it: both passed. You must flip your own stack first, top card first, and your Duck is on top. Flip it.", expect = {type = "flip", target_player_id = YOU}, target = "mat:you"},
 	{say = "You hit your own Duck! It comes back to your hand. You lose one card, but you choose which, even the Duck. Tap one.", expect = {type = "choose_discard"}, target = "hand"},
 	{say = "That's the game! Bet right twice to win. Lose all your cards and you're out. Now go play with friends.", button = "Finish"},
 ]

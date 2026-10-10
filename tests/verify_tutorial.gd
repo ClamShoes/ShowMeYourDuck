@@ -18,6 +18,11 @@ func _initialize() -> void:
 func _run() -> void:
 	_net.start_tutorial("Tester", {}, null)
 	var t = _net.tutorial
+	# Bot steps auto-advance in about a second, so their text must be a glance-length waiting line.
+	for i in t.STEPS.size():
+		var st: Dictionary = t.STEPS[i]
+		if st.has("bot") and st.has("say") and String(st.say).length() > 45:
+			return _fail("bot step %d text is too long to read before it moves on" % i)
 	var gs = t.gs
 	var bill_cards := _owned(gs, "bill")
 	var wrong_checked := false
