@@ -109,6 +109,18 @@ func _run() -> void:
 		push_error("160px should complete scrub window")
 		quit(1)
 		return
+	# Opponent mat across the table: the card turns toward screen-left, so the drag must too.
+	var across := Control.new()
+	across.rotation = PI * 0.9
+	root.add_child(across)
+	var opp = CardScene.instantiate()
+	across.add_child(opp)
+	opp.setup_stack_token(true)
+	if opp.scrub_t_from_mouse_dx(-80.0) < 0.49 or opp.scrub_t_from_mouse_dx(80.0) > 0.001:
+		push_error("on an upside-down mat, dragging left should flip (got %s left, %s right)" % [
+			opp.scrub_t_from_mouse_dx(-80.0), opp.scrub_t_from_mouse_dx(80.0)])
+		quit(1)
+		return
 
 	# Safe settle
 	var safe = CardScene.instantiate()

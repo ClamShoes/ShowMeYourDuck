@@ -545,6 +545,9 @@ func scrub_flip(t: float) -> void:
 
 ## Mouse dx → scrub window 0..1 (no second-half stretch; anim plays that part).
 func scrub_t_from_mouse_dx(dx: float) -> float:
+	# The flip turns toward the card's local +x; on a mat facing us from across the table that's screen-left.
+	if get_global_transform().x.x < -0.01:
+		dx = -dx
 	return clampf(dx / PIXELS_PER_SCRUB, 0.0, 1.0)
 
 
@@ -741,7 +744,8 @@ func _restore_hand_parent() -> void:
 
 
 ## Hold-drag: dx scrubs 0..SCRUB_END_SEC; at full window emit reveal_released.
-## dx is screen-space on purpose: on a rotated opponent mat the gesture stays left/right for the viewer.
+## dx is screen-space on purpose: on a rotated opponent mat the gesture stays left/right for the viewer,
+## in whichever horizontal direction the card visibly turns.
 func _handle_reveal_input(event: InputEvent) -> void:
 	if not interactable:
 		return
